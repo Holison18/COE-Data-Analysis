@@ -6,13 +6,12 @@ import pandas as pd
 # 1. Page Setup
 st.set_page_config(page_title="KNUST Analytics", layout="wide")
 st.title("KNUST Engineering: Historical Data Explorer")
-st.markdown("### Interactive Dashboard for Student Performance Analysis (50-Year Dataset)")
+st.markdown("### Comprehensive Student Performance & Retention Dashboard")
 
 # 2. Connect to Database
 @st.cache_resource
 def get_con():
     try:
-        # Connect in read-only mode string
         return duckdb.connect('knust_engineering.duckdb', read_only=True)
     except Exception as e:
         return None
@@ -20,269 +19,436 @@ def get_con():
 con = get_con()
 
 if not con:
-    st.error("Database connection failed. Please ensure 'knust_engineering.duckdb' exists and is not locked.")
+    st.error("Database connection failed. Please ensure ingestion is complete.")
     st.stop()
 
-# 3. Sidebar Configuration
-st.sidebar.header("Filter Data")
-
-# 3. Sidebar Configuration
+# 3. Sidebar - Global Filters
 st.sidebar.image("https://upload.wikimedia.org/wikipedia/en/thumb/8/87/KNUST_Emblem.png/220px-KNUST_Emblem.png", use_container_width=True)
-st.sidebar.header("Data Filters")
+st.sidebar.header("Global Filters")
 
-# Filter: Faculty
-try:
-    faculties = con.execute("SELECT DISTINCT faculty FROM course_summary ORDER BY faculty").df()['faculty'].dropna().tolist()
-    # Add "All Faculties" option
-    selected_faculty = st.sidebar.selectbox("Select Faculty", ["All Faculties"] + faculties)
-except:
-    st.error("Could not read faculties. Database might be empty.")
-    st.stop()
+# Helper to get valid options
+def get_options(query):
+    try:
+        return con.execute(query).df().iloc[:, 0].dropna().tolist()
+    except:
+        return []
 
-# Filter: Program (Dependent on Faculty)
-if selected_faculty == "All Faculties":
-    programs = con.execute("SELECT DISTINCT program FROM course_summary ORDER BY program").df()['program'].dropna().tolist()
-    selected_prog = st.sidebar.selectbox("Select Program", ["All Programs"] + programs)
-    context_label = "College of Engineering"
-else:
-    programs = con.execute(f"SELECT DISTINCT program FROM course_summary WHERE faculty = '{selected_faculty}' ORDER BY program").df()['program'].dropna().tolist()
-    selected_prog = st.sidebar.selectbox("Select Program", ["All Programs"] + programs)
-    context_label = f"{selected_faculty}"
+# Year Filter
+years = get_options("SELECT DISTINCT academic_year FROM course_summary ORDER BY academic_year")
+selected_year = st.sidebar.selectbox("Academic Year", ["All Years"] + years)
 
-# Filter: Course (Dependent on Program)
-if selected_prog == "All Programs":
-    if selected_faculty == "All Faculties":
-        courses_q = "SELECT DISTINCT course_code FROM course_summary ORDER BY course_code"
-    else:
-        courses_q = f"SELECT DISTINCT course_code FROM course_summary WHERE faculty = '{selected_faculty}' ORDER BY course_code"
-    
-    courses = con.execute(courses_q).df()['course_code'].dropna().tolist()
-    selected_course = st.sidebar.selectbox("Select Course", ["All Courses"] + courses)
-    sub_context_label = "All Programs"
-else:
-    courses = con.execute(f"SELECT DISTINCT course_code FROM course_summary WHERE program = '{selected_prog}' ORDER BY course_code").df()['course_code'].dropna().tolist()
-    selected_course = st.sidebar.selectbox("Select Course", ["All Courses"] + courses)
-    sub_context_label = selected_prog
-    
-st.sidebar.divider()
-st.sidebar.markdown("**Note**: Data spans ~50 years of records.")
+# Faculty Filter (Cascading)
+fac_q = "SELECT DISTINCT faculty FROM course_summary"
+if selected_year != "All Years":
+    fac_q += f" WHERE academic_year = '{selected_year}'"
+fac_q += " ORDER BY faculty"
+faculties = get_options(fac_q)
+selected_faculty = st.sidebar.selectbox("Faculty", ["All Faculties"] + faculties)
 
-# 4. KPI Metrics (Dynamic based on selection)
-st.markdown(f"## Dashboard: {sub_context_label}")
-if selected_faculty != "All Faculties":
-         st.caption(f"Faculty: {selected_faculty}")
+# Department Filter
+dept_q = "SELECT DISTINCT department FROM course_summary WHERE 1=1"
+# Program Filter
+prog_q = "SELECT DISTINCT program FROM course_summary WHERE 1=1"
+if selected_year != "All Years": prog_q += f" AND academic_year = '{selected_year}'"
+if selected_faculty != "All Faculties": prog_q += f" AND faculty = '{selected_faculty}'"
+prog_q += " ORDER BY program"
+programs = get_options(prog_q)
+selected_prog = st.sidebar.selectbox("Program", ["All Programs"] + programs)
 
-col1, col2, col3, col4 = st.columns(4)
+# Course Filter
+course_q = "SELECT DISTINCT course_code FROM course_summary WHERE 1=1"
+if selected_year != "All Years": course_q += f" AND academic_year = '{selected_year}'"
+if selected_faculty != "All Faculties": course_q += f" AND faculty = '{selected_faculty}'"
+if selected_prog != "All Programs": course_q += f" AND program = '{selected_prog}'"
+course_q = f"SELECT DISTINCT REPLACE(course_code, '\n', ' ') as clean_code FROM ({course_q.replace('SELECT DISTINCT course_code', 'SELECT course_code')}) ORDER BY clean_code"
+courses = [x[0] for x in con.execute(course_q).fetchall() if x[0]]
+selected_course = st.sidebar.selectbox("Course", ["All Courses"] + courses)
 
-# Build WHERE clause helper
-def build_where(prog, fac, alias=""):
+# Filter Construction
+def build_where(alias=""):
     prefix = f"{alias}." if alias else ""
-    clauses = []
-    if prog != "All Programs":
-        clauses.append(f"{prefix}program = '{prog}'")
-    elif fac != "All Faculties":
-        clauses.append(f"{prefix}faculty = '{fac}'")
-    return " AND ".join(clauses) if clauses else "1=1"
+    clauses = ["1=1"]
+    if selected_year != "All Years": clauses.append(f"{prefix}academic_year = '{selected_year}'")
+    if selected_faculty != "All Faculties": clauses.append(f"{prefix}faculty = '{selected_faculty}'")
+    if selected_prog != "All Programs": clauses.append(f"{prefix}program = '{selected_prog}'")
+    if selected_course != "All Courses": clauses.append(f"REPLACE({prefix}course_code, '\n', ' ') = '{selected_course}'")
+    return " AND ".join(clauses)
 
-where_clause_summ = build_where(selected_prog, selected_faculty)
-where_clause_marks = build_where(selected_prog, selected_faculty)
+where_clause = build_where()
 
-with col1:
-    # Aggregating across filtered scope
-    total_marks = con.execute(f"SELECT COUNT(*) FROM student_marks WHERE {where_clause_marks}").fetchone()[0]
-    st.metric("Total Exam Records", f"{total_marks:,}", help="Total individual student exam entries.")
+st.sidebar.divider()
+st.sidebar.markdown("**Note:** Data based on ingested excel files.")
 
-with col2:
-    avg_perf = con.execute(f"SELECT AVG(mark) FROM student_marks WHERE {where_clause_marks}").fetchone()[0]
-    st.metric("Overall Average Mark", f"{avg_perf:.2f}" if avg_perf else "N/A", help="Average score across all courses in selection.")
+# 4. Main Tabs
+tab_course, tab_retain, tab_demo, tab_sem = st.tabs(["Course Performance", "Retention & Attrition", "Demographics", "Semester Analysis"])
 
-with col3:
-    # Distinct students
-    total_students = con.execute(f"SELECT COUNT(DISTINCT student_id) FROM student_marks WHERE {where_clause_marks}").fetchone()[0]
-    st.metric("Total Students", f"{total_students:,}", help="Unique students processed.")
-
-with col4:
-    # Failure Rate (Mark < 50)
-    fail_count = con.execute(f"SELECT COUNT(*) FROM student_marks WHERE {where_clause_marks} AND mark < 50").fetchone()[0]
-    fail_rate = (fail_count / total_marks * 100) if total_marks else 0
-    st.metric("Overall Failure Rate", f"{fail_rate:.1f}%", delta=f"-{fail_rate:.1f}%", delta_color="inverse", help="Percentage of marks below 50.")
-
-st.divider()
-
-# 5. Tabs
-tabs = ["Overview & Trends", "Faculty/Program Comparison", "Difficulty Analysis", "Student Stats"]
-tab_overview, tab_comp, tab_diff, tab_stud = st.tabs(tabs)
-
-# --- TAB: OVERVIEW & TRENDS ---
-with tab_overview:
-    st.header("Historical Performance Trends")
-    st.write("How has performance changed over the decades?")
+# --- MODULE A: COURSE PERFORMANCE ---
+with tab_course:
+    st.subheader("Course Performance Analysis")
     
-    st.write("Distribution of student marks across academic years. (Box Plot shows Median, Range, and Outliers)")
-    
-    # Yearly Trend - Box Plot
-    # Use sampling to ensure performance with large datasets
-    q_trend = f"""
-        SELECT academic_year, mark 
-        FROM student_marks 
-        WHERE {where_clause_marks} AND academic_year IS NOT NULL
-        USING SAMPLE 20%
-    """
-    df_trend = con.execute(q_trend).df()
-    
-    if not df_trend.empty:
-        # Sort by year
-        df_trend = df_trend.sort_values('academic_year')
-        
-        fig_trend = px.box(df_trend, x='academic_year', y='mark', 
-                           title="Academic Performance Distribution (Year-over-Year)",
-                           labels={'mark': 'Marks (0-100)', 'academic_year': 'Academic Year'},
-                           color_discrete_sequence=['#FFD700']) # KNUST Gold
-        
-        fig_trend.update_layout(
-            plot_bgcolor='white',
-            yaxis_range=[0, 100], # Fix y-axis to standard marking scale
-            xaxis_title="Academic Year",
-            yaxis_title="Student Marks"
-        )
-        st.plotly_chart(fig_trend, use_container_width=True)
-        
-        with st.expander("How to read this Box Plot"):
-            st.markdown("""
-            - **Middle Line**: The Median mark (50th percentile).
-            - **Box**: Represents the middle 50% of students (25th to 75th percentile).
-            - **Whiskers**: The range of typical marks.
-            - **Dots**: Outliers (Unusually high or low marks).
-            """)
-    else:
-        st.info("No trend data available for the current selection.")
+    # ORDER:
+    # 1. Peak & Dip
+    # 2. Top 10 Table
+    # 3. Difficulty Matrix
+    # 4. Problem Courses
+    # 5. Viz Switcher
+    # 6. Slump & Service
 
-# --- TAB: FACULTY/PROGRAM COMPARISON ---
-with tab_comp:
-    st.header("Comparative Analysis")
-    
-    if selected_prog == "All Programs":
-        # Compare Programs or Facs
-        group_col = "program" if selected_faculty != "All Faculties" else "faculty"
-        
-        st.subheader(f"Performance by {group_col.title()}")
-        q_comp = f"""
-            SELECT {group_col}, AVG(mark) as avg_mark, COUNT(*) as records
-            FROM student_marks
-            WHERE {where_clause_marks}
-            GROUP BY {group_col}
-            ORDER BY avg_mark DESC
-        """
-        df_comp = con.execute(q_comp).df()
-        
-        col_c1, col_c2 = st.columns([2,1])
-        with col_c1:
-            fig_comp = px.bar(df_comp, x=group_col, y='avg_mark', color='avg_mark',
-                             title=f"Which {group_col.title()} performs best?",
-                             text_auto='.2f', # Show values on bars
-                             color_continuous_scale='ylgn')
-            
-            fig_comp.update_layout(
-                yaxis_range=[0, 100], # Fix y-axis to standard 0-100 scale to prevent cutting off
-                xaxis_title=group_col.title(),
-                yaxis_title="Average Mark"
-            )
-            st.plotly_chart(fig_comp, use_container_width=True)
-        with col_c2:
-            st.write(f"**Top Performing {group_col.title()}:**")
-            top = df_comp.iloc[0]
-            st.success(f"{top[group_col]} ({top['avg_mark']:.2f})")
-            
-            st.write(f"**Lowest Performing {group_col.title()}:**")
-            bot = df_comp.iloc[-1]
-            st.error(f"{bot[group_col]} ({bot['avg_mark']:.2f})")
-            
-    else:
-        st.info("Select 'All Programs' to view comparative analysis between departments.")
-
-# --- TAB: DIFFICULTY ANALYSIS ---
-with tab_diff:
-    st.header("Course Difficulty Analysis")
-    st.write("identifying the 'Gatekeeper' courses with the lowest average marks.")
-    
-    # Top 15 Hardest Courses
-    q_hard = f"""
-        SELECT course_code, AVG(mark) as avg_mark, COUNT(*) as students_taken,
-               SUM(CASE WHEN mark < 50 THEN 1 ELSE 0 END) as failures
-        FROM student_marks 
-        WHERE {where_clause_marks}
-        GROUP BY course_code
-        HAVING COUNT(*) > 50  -- Filter out tiny classes
-        ORDER BY avg_mark ASC
-        LIMIT 15
-    """
-    df_hard = con.execute(q_hard).df()
-    
-    if not df_hard.empty:
-        # Fetch Course Names (Mapping)
-        # We take the most common or first name found for each code to handle potential variations
-        q_names = f"""
-            SELECT course_code, MAX(course_name) as course_name
+    # --- 1. PEAK & DIP ---
+    try:
+        q_sem = f"""
+            SELECT academic_year, semester, AVG(avg_mark) as val 
             FROM course_summary 
-            WHERE course_name IS NOT NULL
-            GROUP BY course_code
+            WHERE {where_clause} 
+            GROUP BY academic_year, semester 
+            ORDER BY val DESC
         """
-        df_names = con.execute(q_names).df()
+        df_sem = con.execute(q_sem).df()
         
-        # Ensure course_code is clean for merging
-        # Fix: 'PETE\n356' (Detailed) vs 'PETE 356' (Summary) mismatch
-        df_hard['course_code'] = df_hard['course_code'].astype(str).str.replace('\n', ' ').str.strip()
-        df_names['course_code'] = df_names['course_code'].astype(str).str.replace('\n', ' ').str.strip()
-        
-        # Merge names into hard courses
-        df_hard = df_hard.merge(df_names, on='course_code', how='left')
-        
-        # Calculate Fail Rate
-        df_hard['fail_rate'] = (df_hard['failures'] / df_hard['students_taken']) * 100
-        
-        fig_diff = px.scatter(df_hard, x='avg_mark', y='fail_rate', size='students_taken',
-                              hover_name='course_name', hover_data=['course_code'], # Show Name on hover
-                              color='fail_rate',
-                              title="Course Difficulty Matrix (Low Avg Mark vs High Fail Rate)",
-                              labels={'avg_mark': 'Average Mark', 'fail_rate': 'Failure Rate (%)'},
-                              color_continuous_scale='RdYlGn_r')
-        st.plotly_chart(fig_diff, use_container_width=True)
-        
-        st.subheader("The 'Toughest' Courses List")
-        # Reorder columns to show Name next to Code
-        cols = ['course_code', 'course_name', 'avg_mark', 'fail_rate', 'students_taken']
-        st.dataframe(df_hard[cols].style.format({
-            'avg_mark': '{:.2f}',
-            'fail_rate': '{:.1f}%'
-        }))
-    else:
-        st.warning("Not enough data to determine difficult courses (need >50 records per course).")
+        col1, col2 = st.columns(2)
+        if not df_sem.empty:
+            best = df_sem.iloc[0]
+            worst = df_sem.iloc[-1]
+            with col1:
+                st.metric("Peak Performance", f"{best['academic_year']} Sem {best['semester']}", f"{best['val']:.2f}")
+            with col2:
+                st.metric("Performance Dip", f"{worst['academic_year']} Sem {worst['semester']}", f"{worst['val']:.2f}", delta_color="inverse")
+    except:
+        st.info("Not enough data for Peak & Dip.")
 
-# --- TAB: STUDENT STATS ---
-with tab_stud:
-    st.header("Student Performance Distribution")
+    st.divider()
+
+    # --- 2. TOP 10 TABLE ---
+    st.markdown("##### Top 10 Most Difficult Courses (Lowest Pass Rates)")
     
-    if selected_course != "All Courses":
-         st.subheader(f"Grade Distribution: {selected_course}")
-         q_dist = f"""
-            SELECT mark, academic_year FROM student_marks 
-            WHERE {where_clause_marks} AND course_code = '{selected_course}'
-         """
-         df_dist = con.execute(q_dist).df()
-         if not df_dist.empty:
-             fig_hist = px.histogram(df_dist, x='mark', nbins=20, 
-            title=f"Histogram of Marks: {selected_course}",
-                                   color_discrete_sequence=['black'])
-             st.plotly_chart(fig_hist, use_container_width=True)
-    else:
-        st.subheader("Overall Grade Distribution")
-        # Sample to avoid heavy load if millions of rows
-        q_dist = f"""
-            SELECT mark FROM student_marks 
-            WHERE {where_clause_marks}
-            USING SAMPLE 10%
+    # Calculate DF first (needed for both sections)
+    q_diff = f"""
+        SELECT REPLACE(course_code, '\n', ' ') as clean_code, 
+               MAX(course_name) as course_name,
+               AVG(avg_mark) as mean_mark, 
+               AVG((num_passed * 100.0) / NULLIF((num_passed + num_trailed), 0)) as pass_rate
+        FROM course_summary
+        WHERE {where_clause.replace('course_code', "REPLACE(course_code, '\n', ' ')")}
+        GROUP BY clean_code
+    """
+    df_diff = con.execute(q_diff).df()
+    
+    if not df_diff.empty:
+        # Table Logic
+        top_diff = df_diff.sort_values(by=['pass_rate', 'mean_mark']).head(10)
+        
+        # Calculate Failure Rate
+        top_diff['fail_rate'] = 100 - top_diff['pass_rate']
+        
+        # Format for cleaner display
+        top_diff_display = top_diff[['clean_code', 'course_name', 'mean_mark', 'pass_rate', 'fail_rate']].rename(columns={
+            'clean_code': 'Course Code',
+            'course_name': 'Course Name',
+            'mean_mark': 'Average Mark', 
+            'pass_rate': 'Pass Rate (%)',
+            'fail_rate': 'Failure Rate (%)'
+        })
+        top_diff_display.index = range(1, len(top_diff_display) + 1)
+        st.dataframe(top_diff_display.style.format({'Average Mark': '{:.2f}', 'Pass Rate (%)': '{:.2f}', 'Failure Rate (%)': '{:.2f}'}), use_container_width=True)
+    
+        st.divider()
+
+        # --- 3. DIFFICULTY MATRIX (Plot) ---
+        st.markdown("##### Difficulty Matrix (Avg Mark vs Pass Rate)")
+        
+        # Highlight specific course - MOVED HERE
+        hl_course = st.selectbox("Highlight Course (Optional):", ["None"] + courses)
+
+        # Define Color Logic for Highlight
+        df_diff['color'] = df_diff['clean_code'].apply(lambda x: 'Red' if x == hl_course else 'Blue')
+        size_map = { 'Red': 10, 'Blue': 5 }
+        df_diff['size'] = df_diff['color'].map(size_map)
+
+        fig_diff = px.scatter(df_diff, x='mean_mark', y='pass_rate', hover_name='clean_code',
+                              title="Course Difficulty Matrix",
+                              labels={'mean_mark': 'Average Mark', 'pass_rate': 'Pass Rate (%)'},
+                              color='color', size='size', 
+                              color_discrete_map={'Red': 'red', 'Blue': 'blue'})
+        
+        # Add reference lines - THRESHOLD 40
+        fig_diff.add_hline(y=40, line_dash="dash", annotation_text="Pass Threshold (40%)")
+        fig_diff.add_vline(x=60, line_dash="dash", annotation_text="Avg Threshold")
+        fig_diff.update_xaxes(range=[0, 100])
+        fig_diff.update_yaxes(range=[0, 100])
+        fig_diff.update_layout(showlegend=False)
+        
+        st.plotly_chart(fig_diff, use_container_width=True)
+
+    st.divider()
+
+    # --- 4. PROBLEM COURSES ---
+    st.markdown("##### 'The Problem Courses' Trend")
+    st.write("Tracking difficult courses. Select courses to compare/contrast trends.")
+    
+    # Expanded list based on user analysis - now selectable
+    all_targets = ['EE 151', 'COE 181', 'ME 161', 'MATH 251', 'COE 351', 'ME 159', 'TE 474', 'EE 472', 'COE 485']
+    selected_targets = st.multiselect("Select Gatekeeper Courses", all_targets, default=['EE 151', 'COE 181', 'ME 161'])
+    
+    if selected_targets:
+        targets_sql = ",".join([f"'{t}'" for t in selected_targets])
+        
+        # Aggregated query for clean single-line trends
+        q_prob = f"""
+            SELECT academic_year, REPLACE(course_code, '\n', ' ') as clean_code, AVG(avg_mark) as avg_mark 
+            FROM course_summary 
+            WHERE REPLACE(course_code, '\n', ' ') IN ({targets_sql})
+            AND {where_clause.replace('course_code', "REPLACE(course_code, '\n', ' ')")}
+            GROUP BY academic_year, clean_code
+            ORDER BY academic_year
         """
-        df_dist = con.execute(q_dist).df()
-        fig_hist = px.histogram(df_dist, x='mark', nbins=20, title="Grade Distribution (10% Sample)",
-                               color_discrete_sequence=['black'])
-        st.plotly_chart(fig_hist, use_container_width=True)
+        df_prob = con.execute(q_prob).df()
+        
+        if not df_prob.empty:
+            fig_prob = px.line(df_prob, x='academic_year', y='avg_mark', color='clean_code', markers=True,
+                               title="Performance Trend",
+                               labels={'avg_mark': 'Average Mark'})
+            fig_prob.update_yaxes(range=[0, 100])
+            st.plotly_chart(fig_prob, use_container_width=True)
+        else:
+            st.info("No data found for selected courses.")
+    else:
+        st.warning("Please select at least one course.")
+
+    st.divider()
+    
+    # --- 5. HISTORICAL PERFORMANCE EXPLORER (Viz Switcher) ---
+    st.markdown("##### Historical Performance Trends")
+    viz_type = st.radio("Select Visualization:", ["Line Chart (Trends)", "Box Plot (Spread)", "Histogram (Distribution)"], horizontal=True)
+    
+    if viz_type == "Line Chart (Trends)":
+        q_trend = f"SELECT academic_year, AVG(mark) as val FROM student_performance WHERE {where_clause} GROUP BY academic_year ORDER BY academic_year"
+        df_t = con.execute(q_trend).df()
+        if not df_t.empty:
+            st.plotly_chart(px.line(df_t, x='academic_year', y='val', markers=True, title="Average Marks Trend"), use_container_width=True)
+            
+    elif viz_type == "Box Plot (Spread)":
+        q_box = f"SELECT academic_year, mark FROM student_performance WHERE {where_clause} USING SAMPLE 10%"
+        df_b = con.execute(q_box).df()
+        if not df_b.empty:
+            st.plotly_chart(px.box(df_b.sort_values('academic_year'), x='academic_year', y='mark', title="Mark Distribution by Year"), use_container_width=True)
+            
+    elif viz_type == "Histogram (Distribution)":
+        q_hist = f"SELECT mark FROM student_performance WHERE {where_clause} USING SAMPLE 10%"
+        df_h = con.execute(q_hist).df()
+        if not df_h.empty:
+            st.plotly_chart(px.histogram(df_h, x='mark', nbins=20, title="Overall Grade Distribution"), use_container_width=True)
+
+    st.divider()
+
+    # --- 6. SERVICE COURSES (MATH DIVERGENCE) ---
+    st.markdown("##### 'The Math Divergence' (Sem 1 vs Sem 2)")
+    st.write("Comparison of Algebra (Math 151) vs Calculus (Math 152)")
+    q_div = f"""
+        SELECT REPLACE(course_code, '\n', ' ') as clean_code, AVG(avg_mark) as val
+        FROM course_summary
+        WHERE REPLACE(course_code, '\n', ' ') IN ('MATH 151', 'MATH 152')
+        AND {where_clause.replace('course_code', "REPLACE(course_code, '\n', ' ')")}
+        GROUP BY clean_code
+    """
+    df_div = con.execute(q_div).df()
+    if not df_div.empty:
+        fig_div = px.bar(df_div, x='clean_code', y='val', color='clean_code',
+                         title="Sem 1 vs Sem 2 Math Performance",
+                         text_auto='.2f')
+        fig_div.update_yaxes(range=[0, 100])
+        st.plotly_chart(fig_div, use_container_width=True)
+
+# --- MODULE B: RETENTION & ATTRITION ---
+with tab_retain:
+    st.subheader("Retention & Attrition Insights")
+    
+    # 1. ATTRITION (Withdrawn)
+    st.warning("Note: 'Withdrawn' status not explicitly tracked. Showing Failure/Trail Rates as integrity proxy.")
+    
+    q_risk = f"""
+        SELECT academic_year, SUM(num_trailed) as trails, SUM(num_passed) as passes
+        FROM course_summary 
+        WHERE {where_clause}
+        GROUP BY academic_year
+        ORDER BY academic_year
+    """
+    df_risk = con.execute(q_risk).df()
+    if not df_risk.empty:
+        df_risk['total'] = df_risk['trails'] + df_risk['passes']
+        df_risk['trail_rate'] = (df_risk['trails'] / df_risk['total']) * 100
+        st.plotly_chart(px.bar(df_risk, x='academic_year', y='trail_rate', title="Trail Rate (Percentage of Fails) per Year"), use_container_width=True)
+
+    # 2. STICKY TRAIL (Binned Bar Chart)
+    st.markdown("##### 'The Sticky Trail': Impact of Trails on CWA")
+    st.write("Average CWA for students grouped by number of trailed courses.")
+    
+    # Threshold 40
+    q_sticky = f"""
+        WITH trail_counts AS (
+            SELECT student_id, AVG(cwa) as avg_cwa, 
+                   COUNT(CASE WHEN mark < 40 THEN 1 END) as num_trails
+            FROM student_performance
+            WHERE {where_clause} AND cwa IS NOT NULL
+            GROUP BY student_id
+        ),
+        binned_trails AS (
+            SELECT avg_cwa, 
+                   CASE 
+                       WHEN num_trails = 0 THEN '0 Trails'
+                       WHEN num_trails BETWEEN 1 AND 2 THEN '1-2 Trails'
+                       WHEN num_trails BETWEEN 3 AND 5 THEN '3-5 Trails'
+                       ELSE '6+ Trails'
+                   END as trail_group,
+                   CASE 
+                       WHEN num_trails = 0 THEN 0
+                       WHEN num_trails BETWEEN 1 AND 2 THEN 1
+                       WHEN num_trails BETWEEN 3 AND 5 THEN 2
+                       ELSE 3
+                   END as sort_order
+            FROM trail_counts
+        )
+        SELECT trail_group, AVG(avg_cwa) as mean_cwa, sort_order
+        FROM binned_trails
+        GROUP BY trail_group, sort_order
+        ORDER BY sort_order
+    """
+    df_sticky = con.execute(q_sticky).df()
+    
+    if not df_sticky.empty:
+        fig_stick = px.bar(df_sticky, x='trail_group', y='mean_cwa',
+                               title="Average CWA by Trail Count Group",
+                               labels={'trail_group': 'Trail Category', 'mean_cwa': 'Average CWA'},
+                               text_auto='.2f', color='trail_group',
+                               color_discrete_sequence=px.colors.qualitative.Prism)
+        fig_stick.update_yaxes(range=[0, 100])
+        fig_stick.update_layout(showlegend=False)
+        st.plotly_chart(fig_stick, use_container_width=True)
+    else:
+        st.info("Not enough data with CWA and Trails.")
+
+    # --- 3. OVERLOAD TRAP (Removed) ---
+
+
+# --- MODULE C: DEMOGRAPHICS ---
+with tab_demo:
+    st.subheader("Demographic Analysis")
+    
+    # GENDER GAP in Gatekeepers
+    st.markdown("##### Gender Gap Analysis")
+    st.write("Compare Male vs Female performance in specific courses.")
+    
+    default_gk = ['MATH 151', 'EE 151', 'COE 181', 'ME 161']
+    # Filter default to available courses
+    avail_defaults = [c for c in default_gk if c in courses]
+    
+    selected_gk = st.multiselect("Select Courses to Analyze", courses, default=avail_defaults)
+    
+    if selected_gk:
+        gk_sql = ",".join([f"'{t}'" for t in selected_gk])
+        q_gender = f"""
+            SELECT REPLACE(course_code, '\n', ' ') as clean_code, gender, mark
+            FROM student_performance
+            WHERE REPLACE(course_code, '\n', ' ') IN ({gk_sql}) AND gender IN ('Male', 'Female')
+            AND {where_clause.replace('course_code', "REPLACE(course_code, '\n', ' ')")}
+        """
+        df_gender = con.execute(q_gender).df()
+        
+        if not df_gender.empty:
+            fig_gen = px.box(df_gender, x='clean_code', y='mark', color='gender',
+                             title="Performance Distribution by Gender",
+                             color_discrete_map={'Male': '#1f77b4', 'Female': '#e377c2'})
+            fig_gen.update_yaxes(range=[0, 100])
+            st.plotly_chart(fig_gen, use_container_width=True)
+        else:
+            st.info("No gender data found for these courses.")
+    else:
+        st.warning("Please select at least one course.")
+
+# --- MODULE E: DETAILED SEMESTER ANALYSIS ---
+with tab_sem:
+    st.subheader("Detailed Semester Analysis")
+    st.write("Deep dive into specific Course trends and Semester Trajectories.")
+    
+    # 1. COURSE HISTORY EXPLORER
+    st.divider()
+    st.markdown("##### Course History Explorer")
+    st.write("Select a course to see how it has performed over differrent Academic Years.")
+    
+    hist_course = st.selectbox("Select Course for History", courses)
+    
+    if hist_course:
+        q_hist = f"""
+            SELECT academic_year, mark
+            FROM student_performance
+            WHERE REPLACE(course_code, '\n', ' ') = '{hist_course}'
+            AND {where_clause.replace('course_code', "REPLACE(course_code, '\n', ' ')")}
+            ORDER BY academic_year
+        """
+        df_hist = con.execute(q_hist).df()
+        
+        if not df_hist.empty:
+            # Calculate Year Coverage
+            total_years = len(years) # 'years' list from sidebar
+            course_years = df_hist['academic_year'].nunique()
+            
+            # Display Metrics
+            m1, m2 = st.columns(2)
+            m1.metric("Data Available For", f"{course_years} / {total_years} Years")
+            m2.metric("Missing Years", total_years - course_years)
+        
+            # Box plot to show distribution over time (Years)
+            fig_hist = px.box(df_hist, x='academic_year', y='mark', 
+                              title=f"Historical Performance Distribution: {hist_course}",
+                              labels={'academic_year': 'Academic Year', 'mark': 'Mark'})
+            fig_hist.update_yaxes(range=[0, 100])
+            st.plotly_chart(fig_hist, use_container_width=True)
+            
+            # Avg Trend Line
+            avg_hist = df_hist.groupby('academic_year')['mark'].mean().reset_index()
+            fig_trend = px.line(avg_hist, x='academic_year', y='mark', markers=True,
+                                title=f"Average Mark Trend: {hist_course}")
+            fig_trend.update_yaxes(range=[0, 100])
+            st.plotly_chart(fig_trend, use_container_width=True)
+        else:
+            st.info(f"No historical data found for {hist_course}")
+
+    # 2. SEMESTER IMPACT ANALYSIS
+    st.divider()
+    st.markdown("##### Semester Impact Trajectory")
+    st.write("How does student performance evolve from Year 1 Sem 1 to Year 4 Sem 2?")
+    
+    q_traj = f"""
+        WITH sem_perf AS (
+            SELECT 
+                CASE 
+                    WHEN REPLACE(course_code, '\n', ' ') LIKE '%1__' THEN 'Year 1'
+                    WHEN REPLACE(course_code, '\n', ' ') LIKE '%2__' THEN 'Year 2'
+                    WHEN REPLACE(course_code, '\n', ' ') LIKE '%3__' THEN 'Year 3'
+                    WHEN REPLACE(course_code, '\n', ' ') LIKE '%4__' THEN 'Year 4'
+                    ELSE 'Other'
+                END as level_est,
+                semester,
+                avg_mark as swa_proxy
+            FROM course_summary
+            WHERE {where_clause.replace('course_code', "REPLACE(course_code, '\n', ' ')")}
+        )
+        SELECT level_est, semester, AVG(swa_proxy) as mean_perf
+        FROM sem_perf
+        WHERE level_est != 'Other'
+        GROUP BY level_est, semester
+        ORDER BY level_est, semester
+    """
+    df_traj = con.execute(q_traj).df()
+    
+    if not df_traj.empty:
+        df_traj['sem_label'] = df_traj['level_est'] + " Sem " + df_traj['semester'].astype(str)
+        
+        fig_traj = px.line(df_traj, x='sem_label', y='mean_perf', markers=True,
+                           title="Cohort Performance Trajectory (Est. by Course Levels)",
+                           labels={'sem_label': 'Semester Step', 'mean_perf': 'Average Performance'},
+                           text='mean_perf')
+        fig_traj.update_traces(textposition="bottom right")
+        fig_traj.update_yaxes(range=[40, 80]) # Zoom in on passing range
+        st.plotly_chart(fig_traj, use_container_width=True)
+    else:
+        st.info("Insufficient data for Trajectory Analysis.")

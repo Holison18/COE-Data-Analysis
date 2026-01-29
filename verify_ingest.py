@@ -14,11 +14,11 @@ try:
         print(con.execute("SELECT * FROM course_summary LIMIT 5").df())
     
     # 2. Check Student Marks
-    print("\n--- Table: student_marks ---")
-    marks_count = con.execute("SELECT COUNT(*) FROM student_marks").fetchone()[0]
+    print("\n--- Table: student_performance ---")
+    marks_count = con.execute("SELECT COUNT(*) FROM student_performance").fetchone()[0]
     print(f"Total Rows: {marks_count}")
     if marks_count > 0:
-        print(con.execute("SELECT * FROM student_marks LIMIT 5").df())
+        print(con.execute("SELECT * FROM student_performance LIMIT 5").df())
         
     # 3. Aggregations
     print("\n--- Summary by Faculty ---")
