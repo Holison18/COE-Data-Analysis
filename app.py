@@ -80,9 +80,9 @@ st.sidebar.divider()
 st.sidebar.markdown("**Note:** Data based on ingested excel files.")
 
 # 4. Main Tabs
-tab_course, tab_retain, tab_demo, tab_sem = st.tabs(["Course Performance", "Retention & Attrition", "Demographics", "Semester Analysis"])
+tab_course, tab_retain, tab_demo, tab_sem, tab_overview = st.tabs(["Course Performance", "Retention & Attrition", "Demographics", "Semester Analysis", "Course Overview"])
 
-# --- MODULE A: COURSE PERFORMANCE ---
+
 with tab_course:
     st.subheader("Course Performance Analysis")
     
@@ -452,3 +452,61 @@ with tab_sem:
         st.plotly_chart(fig_traj, use_container_width=True)
     else:
         st.info("Insufficient data for Trajectory Analysis.")
+
+# --- MODULE 0: COURSE OVERVIEW ---
+with tab_overview:
+    st.subheader("Course Overview")
+    st.write("Browse courses and see which programs offer them.")
+    
+    # Search Feature
+    search_term = st.text_input("Search Course Code or Name", "")
+
+    # Query to get Course Details
+    # We group by Course Code and Name, and aggregate Programs and Years
+    q_overview = f"""
+        SELECT 
+            REPLACE(course_code, '\n', ' ') as clean_code, 
+            MAX(course_name) as course_name,
+            LIST(DISTINCT program) as programs,
+            LIST(DISTINCT academic_year) as years
+        FROM course_summary
+        WHERE {where_clause.replace('course_code', "REPLACE(course_code, '\n', ' ')")}
+        GROUP BY clean_code
+        ORDER BY clean_code
+    """
+    df_overview = con.execute(q_overview).df()
+    
+    if not df_overview.empty:
+        # Convert lists to string for display if needed, or keep as list for standard dataframe
+        # Streamlit dataframe handles lists nicely now, but string is safer for search
+        df_overview['programs'] = df_overview['programs'].apply(lambda x: ", ".join(sorted(x)) if x is not None and len(x) > 0 else "")
+        df_overview['years'] = df_overview['years'].apply(lambda x: ", ".join(sorted(x)) if x is not None and len(x) > 0 else "")
+        
+        # Renaissance Columns
+        df_display = df_overview.rename(columns={
+            'clean_code': 'Course Code',
+            'course_name': 'Course Name',
+            'programs': 'Offered In',
+            'years': 'Academic Years'
+        })
+        
+        # Apply Search Filter
+        if search_term:
+            df_display = df_display[
+                df_display['Course Code'].str.contains(search_term, case=False) | 
+                df_display['Course Name'].str.contains(search_term, case=False)
+            ]
+
+        st.dataframe(
+            df_display,
+            column_config={
+                "Course Code": st.column_config.TextColumn("Course Code", width="small"),
+                "Course Name": st.column_config.TextColumn("Course Name", width="medium"),
+                "Offered In": st.column_config.TextColumn("Offered In Programs", width="large", help="The programs that include this course."),
+                "Academic Years": st.column_config.TextColumn("Academic Years", width="medium", help="Years for which data is available.")
+            },
+            use_container_width=False,
+            hide_index=True
+        )
+    else:
+        st.info("No courses found matching the selected filters.")
