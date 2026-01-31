@@ -1,4 +1,4 @@
-import streamlit as st
+﻿import streamlit as st
 import duckdb
 import plotly.express as px
 import pandas as pd
@@ -80,7 +80,7 @@ st.sidebar.divider()
 st.sidebar.markdown("**Note:** Data based on ingested excel files.")
 
 # 4. Main Tabs
-tab_course, tab_retain, tab_demo, tab_sem, tab_overview = st.tabs(["Course Performance", "Retention & Attrition", "Demographics", "Semester Analysis", "Course Overview"])
+tab_course, tab_cohort, tab_retain, tab_demo, tab_sem, tab_overview = st.tabs(["Course Performance", "Cohort Analysis", "Retention & Attrition", "Demographics", "Semester Analysis", "Course Overview"])
 
 
 with tab_course:
@@ -110,16 +110,16 @@ with tab_course:
             best = df_sem.iloc[0]
             worst = df_sem.iloc[-1]
             with col1:
-                st.metric("Peak Performance", f"{best['academic_year']} Sem {best['semester']}", f"{best['val']:.2f}")
+                st.metric("Highest Average", f"{best['academic_year']} Sem {best['semester']}", f"{best['val']:.2f}")
             with col2:
-                st.metric("Performance Dip", f"{worst['academic_year']} Sem {worst['semester']}", f"{worst['val']:.2f}", delta_color="inverse")
+                st.metric("Lowest Average", f"{worst['academic_year']} Sem {worst['semester']}", f"{worst['val']:.2f}", delta_color="inverse")
     except:
         st.info("Not enough data for Peak & Dip.")
 
     st.divider()
 
-    # --- 2. TOP 10 TABLE ---
-    st.markdown("##### Top 10 Most Difficult Courses (Lowest Pass Rates)")
+    # --- 2. TOP 10 TABLES ---
+    st.markdown("#### Course Pass Rate Analysis")
     
     # Calculate DF first (needed for both sections)
     q_diff = f"""
@@ -134,90 +134,117 @@ with tab_course:
     df_diff = con.execute(q_diff).df()
     
     if not df_diff.empty:
-        # Table Logic
-        top_diff = df_diff.sort_values(by=['pass_rate', 'mean_mark']).head(10)
+        df_diff['fail_rate'] = 100 - df_diff['pass_rate']
         
-        # Calculate Failure Rate
-        top_diff['fail_rate'] = 100 - top_diff['pass_rate']
+        c1, c2 = st.columns(2)
         
-        # Format for cleaner display
-        top_diff_display = top_diff[['clean_code', 'course_name', 'mean_mark', 'pass_rate', 'fail_rate']].rename(columns={
-            'clean_code': 'Course Code',
-            'course_name': 'Course Name',
-            'mean_mark': 'Average Mark', 
-            'pass_rate': 'Pass Rate (%)',
-            'fail_rate': 'Failure Rate (%)'
-        })
-        top_diff_display.index = range(1, len(top_diff_display) + 1)
-        st.dataframe(top_diff_display.style.format({'Average Mark': '{:.2f}', 'Pass Rate (%)': '{:.2f}', 'Failure Rate (%)': '{:.2f}'}), use_container_width=True)
+        with c1:
+            st.markdown("##### Highest Pass Rates")
+            top_easy = df_diff.sort_values(by=['pass_rate', 'mean_mark'], ascending=[False, False]).head(10)
+            
+            top_easy_display = top_easy[['clean_code', 'course_name', 'mean_mark', 'pass_rate', 'fail_rate']].rename(columns={
+                'clean_code': 'Code',
+                'course_name': 'Name',
+                'mean_mark': 'Avg', 
+                'pass_rate': 'Pass%',
+                'fail_rate': 'Fail%'
+            })
+            top_easy_display.index = range(1, len(top_easy_display) + 1)
+            st.dataframe(top_easy_display.style.format({'Avg': '{:.1f}', 'Pass%': '{:.1f}', 'Fail%': '{:.1f}'}), use_container_width=True)
+
+        with c2:
+            st.markdown("##### Lowest Pass Rates")
+            top_diff = df_diff.sort_values(by=['pass_rate', 'mean_mark'], ascending=[True, True]).head(10)
+            
+            top_diff_display = top_diff[['clean_code', 'course_name', 'mean_mark', 'pass_rate', 'fail_rate']].rename(columns={
+                'clean_code': 'Code',
+                'course_name': 'Name',
+                'mean_mark': 'Avg', 
+                'pass_rate': 'Pass%',
+                'fail_rate': 'Fail%'
+            })
+            top_diff_display.index = range(1, len(top_diff_display) + 1)
+            st.dataframe(top_diff_display.style.format({'Avg': '{:.1f}', 'Pass%': '{:.1f}', 'Fail%': '{:.1f}'}), use_container_width=True)
     
         st.divider()
 
         # --- 3. DIFFICULTY MATRIX (Plot) ---
-        st.markdown("##### Difficulty Matrix (Avg Mark vs Pass Rate)")
+        st.markdown("#### Pass Rate vs Average Mark Matrix")
         
         # Highlight specific course - MOVED HERE
         hl_course = st.selectbox("Highlight Course (Optional):", ["None"] + courses)
 
-        # Define Color Logic for Highlight
-        df_diff['color'] = df_diff['clean_code'].apply(lambda x: 'Red' if x == hl_course else 'Blue')
-        size_map = { 'Red': 10, 'Blue': 5 }
-        df_diff['size'] = df_diff['color'].map(size_map)
+        # Define Highlight Logic
+        # 1. Size (Larger for highlighted)
+        df_diff['size'] = df_diff['clean_code'].apply(lambda x: 20 if x == hl_course else 8)
+        # 2. Border Width (Black border for highlighted)
+        df_diff['line_width'] = df_diff['clean_code'].apply(lambda x: 2 if x == hl_course else 0)
+        # 3. Sort Order (Highlighted last = drawn on top)
+        df_diff['is_hl'] = df_diff['clean_code'] == hl_course
+        df_diff = df_diff.sort_values('is_hl')
 
         fig_diff = px.scatter(df_diff, x='mean_mark', y='pass_rate', hover_name='clean_code',
-                              title="Course Difficulty Matrix",
+                              title="Course Performance Matrix",
                               labels={'mean_mark': 'Average Mark', 'pass_rate': 'Pass Rate (%)'},
-                              color='color', size='size', 
-                              color_discrete_map={'Red': 'red', 'Blue': 'blue'})
+                              color='pass_rate', size='size', 
+                              color_continuous_scale='RdYlGn',
+                              range_color=[0, 100])
+        
+        # Apply custom marker styling (Border) using the columns we created
+        fig_diff.update_traces(marker=dict(line=dict(width=df_diff['line_width'], color='Black')))
         
         # Add reference lines - THRESHOLD 40
         fig_diff.add_hline(y=40, line_dash="dash", annotation_text="Pass Threshold (40%)")
         fig_diff.add_vline(x=60, line_dash="dash", annotation_text="Avg Threshold")
         fig_diff.update_xaxes(range=[0, 100])
         fig_diff.update_yaxes(range=[0, 100])
+        # Hide the 'size' legend if it appears (color bar remains)
         fig_diff.update_layout(showlegend=False)
         
         st.plotly_chart(fig_diff, use_container_width=True)
 
     st.divider()
 
-    # --- 4. PROBLEM COURSES ---
-    st.markdown("##### 'The Problem Courses' Trend")
-    st.write("Tracking difficult courses. Select courses to compare/contrast trends.")
-    
-    # Expanded list based on user analysis - now selectable
-    all_targets = ['EE 151', 'COE 181', 'ME 161', 'MATH 251', 'COE 351', 'ME 159', 'TE 474', 'EE 472', 'COE 485']
-    selected_targets = st.multiselect("Select Gatekeeper Courses", all_targets, default=['EE 151', 'COE 181', 'ME 161'])
-    
-    if selected_targets:
-        targets_sql = ",".join([f"'{t}'" for t in selected_targets])
+    # --- 4. COMPARATIVE TREND ANALYSIS ---
+    st.markdown("#### Comparative Trend Analysis")
+    st.write("Select multiple courses to compare their historical performance trends side-by-side.")
+
+    # Multiselect for courses
+    cmp_courses = st.multiselect("Select Courses to Compare", courses, default=[])
+
+    if cmp_courses:
+        cmp_sql = ",".join([f"'{c}'" for c in cmp_courses])
         
-        # Aggregated query for clean single-line trends
-        q_prob = f"""
-            SELECT academic_year, REPLACE(course_code, '\n', ' ') as clean_code, AVG(avg_mark) as avg_mark 
-            FROM course_summary 
-            WHERE REPLACE(course_code, '\n', ' ') IN ({targets_sql})
+        q_cmp = f"""
+            SELECT academic_year, REPLACE(course_code, '\n', ' ') as clean_code, 
+                   AVG(avg_mark) as avg_mark
+            FROM course_summary
+            WHERE REPLACE(course_code, '\n', ' ') IN ({cmp_sql})
             AND {where_clause.replace('course_code', "REPLACE(course_code, '\n', ' ')")}
             GROUP BY academic_year, clean_code
             ORDER BY academic_year
         """
-        df_prob = con.execute(q_prob).df()
+        df_cmp = con.execute(q_cmp).df()
         
-        if not df_prob.empty:
-            fig_prob = px.line(df_prob, x='academic_year', y='avg_mark', color='clean_code', markers=True,
-                               title="Performance Trend",
-                               labels={'avg_mark': 'Average Mark'})
-            fig_prob.update_yaxes(range=[0, 100])
-            st.plotly_chart(fig_prob, use_container_width=True)
+        if not df_cmp.empty:
+            # Enforce chronological order for X-axis
+            sorted_years = sorted(df_cmp['academic_year'].unique())
+
+            fig_cmp = px.line(df_cmp, x='academic_year', y='avg_mark', color='clean_code', markers=True,
+                              title="Comparative Trend Analysis",
+                              labels={'avg_mark': 'Average Mark', 'clean_code': 'Course'},
+                              category_orders={'academic_year': sorted_years})
+            fig_cmp.update_yaxes(range=[0, 100])
+            st.plotly_chart(fig_cmp, use_container_width=True)
         else:
-            st.info("No data found for selected courses.")
+            st.info("No data found for the selected courses.")
     else:
-        st.warning("Please select at least one course.")
+        st.info("Please select at least one course.")
 
     st.divider()
     
     # --- 5. HISTORICAL PERFORMANCE EXPLORER (Viz Switcher) ---
-    st.markdown("##### Historical Performance Trends")
+    st.markdown("#### Historical Performance Trends")
     viz_type = st.radio("Select Visualization:", ["Line Chart (Trends)", "Box Plot (Spread)", "Histogram (Distribution)"], horizontal=True)
     
     if viz_type == "Line Chart (Trends)":
@@ -240,23 +267,9 @@ with tab_course:
 
     st.divider()
 
-    # --- 6. SERVICE COURSES (MATH DIVERGENCE) ---
-    st.markdown("##### 'The Math Divergence' (Sem 1 vs Sem 2)")
-    st.write("Comparison of Algebra (Math 151) vs Calculus (Math 152)")
-    q_div = f"""
-        SELECT REPLACE(course_code, '\n', ' ') as clean_code, AVG(avg_mark) as val
-        FROM course_summary
-        WHERE REPLACE(course_code, '\n', ' ') IN ('MATH 151', 'MATH 152')
-        AND {where_clause.replace('course_code', "REPLACE(course_code, '\n', ' ')")}
-        GROUP BY clean_code
-    """
-    df_div = con.execute(q_div).df()
-    if not df_div.empty:
-        fig_div = px.bar(df_div, x='clean_code', y='val', color='clean_code',
-                         title="Sem 1 vs Sem 2 Math Performance",
-                         text_auto='.2f')
-        fig_div.update_yaxes(range=[0, 100])
-        st.plotly_chart(fig_div, use_container_width=True)
+
+
+
 
 # --- MODULE B: RETENTION & ATTRITION ---
 with tab_retain:
@@ -279,7 +292,7 @@ with tab_retain:
         st.plotly_chart(px.bar(df_risk, x='academic_year', y='trail_rate', title="Trail Rate (Percentage of Fails) per Year"), use_container_width=True)
 
     # 2. STICKY TRAIL (Binned Bar Chart)
-    st.markdown("##### 'The Sticky Trail': Impact of Trails on CWA")
+    st.markdown("#### Impact of Trailed Courses on CWA")
     st.write("Average CWA for students grouped by number of trailed courses.")
     
     # Threshold 40
@@ -334,7 +347,7 @@ with tab_demo:
     st.subheader("Demographic Analysis")
     
     # GENDER GAP in Gatekeepers
-    st.markdown("##### Gender Gap Analysis")
+    st.markdown("#### Gender Gap Analysis")
     st.write("Compare Male vs Female performance in specific courses.")
     
     default_gk = ['MATH 151', 'EE 151', 'COE 181', 'ME 161']
@@ -371,7 +384,7 @@ with tab_sem:
     
     # 1. COURSE HISTORY EXPLORER
     st.divider()
-    st.markdown("##### Course History Explorer")
+    st.markdown("#### Course History Explorer")
     st.write("Select a course to see how it has performed over differrent Academic Years.")
     
     hist_course = st.selectbox("Select Course for History", courses)
@@ -414,7 +427,7 @@ with tab_sem:
 
     # 2. SEMESTER IMPACT ANALYSIS
     st.divider()
-    st.markdown("##### Semester Impact Trajectory")
+    st.markdown("#### Semester Impact Trajectory")
     st.write("How does student performance evolve from Year 1 Sem 1 to Year 4 Sem 2?")
     
     q_traj = f"""
@@ -508,5 +521,151 @@ with tab_overview:
             use_container_width=False,
             hide_index=True
         )
-    else:
         st.info("No courses found matching the selected filters.")
+
+# --- MODULE F: COHORT ANALYSIS ---
+with tab_cohort:
+    st.subheader("Cohort Progress Analysis")
+    st.write("Analyze the progression of a specific cohort (students who entered in the same year) from entry to completion.")
+    
+    # 1. Cohort Selection
+    # Define Cohort: Students who took Level 100 courses in a specific year
+    q_cohort_years = """
+        SELECT DISTINCT academic_year 
+        FROM student_performance 
+        WHERE REPLACE(course_code, '\n', ' ') LIKE '%1__'
+        ORDER BY academic_year
+    """
+    try:
+        cohort_years = [x[0] for x in con.execute(q_cohort_years).fetchall() if x[0]]
+    except:
+        cohort_years = []
+        
+    col_c1, col_c2 = st.columns([1, 3])
+    with col_c1:
+        sel_cohort = st.selectbox("Select Cohort (Entry Year)", cohort_years)
+    
+    if sel_cohort:
+        # Build Filter for Cohort (Respects Faculty/Dept/Prog but IGNORES Global Year)
+        # We redefine the filter logic locally
+        cohort_clauses = ["1=1"]
+        if selected_faculty != "All Faculties": cohort_clauses.append(f"faculty = '{selected_faculty}'")
+        if selected_prog != "All Programs": cohort_clauses.append(f"program = '{selected_prog}'")
+        cohort_where = " AND ".join(cohort_clauses)
+        
+        # 2. Identify Cohort Students
+        # Students who started in sel_cohort AND match other filters
+        # EXCLUDING students who have records in prior years (to filter out trailers)
+        q_ids = f"""
+            WITH starters AS (
+                SELECT DISTINCT student_id 
+                FROM student_performance
+                WHERE academic_year = '{sel_cohort}'
+                AND REPLACE(course_code, '\n', ' ') LIKE '%1__'
+            ),
+            matches AS (
+                SELECT DISTINCT student_id 
+                FROM student_performance 
+                WHERE {cohort_where}
+            ),
+            priors AS (
+                SELECT DISTINCT student_id
+                FROM student_performance
+                WHERE academic_year < '{sel_cohort}'
+            )
+            SELECT s.student_id 
+            FROM starters s
+            JOIN matches m ON s.student_id = m.student_id
+            WHERE s.student_id NOT IN (SELECT student_id FROM priors)
+        """
+        
+        # 3. Aggregated Progress Data
+        # We pull data for these students across ALL years
+        q_prog = f"""
+            WITH cohort_list AS ({q_ids})
+            SELECT 
+                academic_year,
+                COUNT(DISTINCT student_id) as active_students,
+                AVG(mark) as avg_mark,
+                AVG(cwa) as avg_cwa,
+                COUNT(CASE WHEN num_trailed > 0 THEN 1 END) as students_trailing_courses
+            FROM (
+                -- Join performance with summary to get num_trailed if needed, 
+                -- or just compute from raw marks if simpler. 
+                -- For simplicity, let's use student_performance directly.
+                SELECT sp.student_id, sp.academic_year, sp.mark, sp.cwa, 0 as num_trailed
+                FROM student_performance sp
+                JOIN cohort_list cl ON sp.student_id = cl.student_id
+            )
+            GROUP BY academic_year
+            ORDER BY academic_year
+        """
+        
+        df_cohort = con.execute(q_prog).df()
+        
+        if not df_cohort.empty:
+            # Display Key Metrics (Current Status vs Entry)
+            initial_count = df_cohort.iloc[0]['active_students']
+            current_count = df_cohort.iloc[-1]['active_students']
+            retention_rate = (current_count / initial_count) * 100 if initial_count > 0 else 0
+            
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Cohort Size (Year 1)", initial_count)
+            m2.metric("Current active / Recorded", current_count)
+            m3.metric("Retention/Data Rate", f"{retention_rate:.1f}%")
+            
+            st.divider()
+            
+            # Visualizations
+            c1, c2 = st.columns(2)
+            
+            with c1:
+                # Retention Funnel (Bar Chart)
+                fig_ret = px.bar(df_cohort, x='academic_year', y='active_students',
+                                 title=f"Cohort Retention: {sel_cohort} Intake",
+                                 labels={'active_students': 'Number of Students', 'academic_year': 'Academic Year'},
+                                 text='active_students')
+                fig_ret.update_traces(textposition='outside')
+                st.plotly_chart(fig_ret, use_container_width=True)
+                
+            with c2:
+                # Performance Trajectory
+                fig_perf = px.line(df_cohort, x='academic_year', y='avg_mark', markers=True,
+                                   title=f"Performance Trajectory: {sel_cohort} Intake",
+                                   labels={'avg_mark': 'Average Mark', 'academic_year': 'Academic Year'})
+                fig_perf.update_yaxes(range=[40, 80])
+                st.plotly_chart(fig_perf, use_container_width=True)
+
+            # --- 4. SEMESTER BREAKDOWN ---
+            st.markdown("#### Semester-by-Semester Progression")
+            st.write("Average performance broken down by specific semesters (e.g., Year 1 Sem 1, Year 1 Sem 2).")
+            
+            q_sem_prog = f"""
+                WITH cohort_list AS ({q_ids})
+                SELECT 
+                    sp.academic_year,
+                    sp.semester,
+                    AVG(sp.mark) as avg_mark
+                FROM student_performance sp
+                JOIN cohort_list cl ON sp.student_id = cl.student_id
+                GROUP BY sp.academic_year, sp.semester
+                ORDER BY sp.academic_year, sp.semester
+            """
+            df_sem_prog = con.execute(q_sem_prog).df()
+            
+            if not df_sem_prog.empty:
+                # Create a readable label
+                df_sem_prog['sem_label'] = df_sem_prog['academic_year'] + " Sem " + df_sem_prog['semester'].astype(str)
+                
+                fig_sem = px.line(df_sem_prog, x='sem_label', y='avg_mark', markers=True,
+                                  title=f"Semester-by-Semester Performance: {sel_cohort} Intake",
+                                  labels={'sem_label': 'Semester', 'avg_mark': 'Average Mark'})
+                fig_sem.update_yaxes(range=[40, 80])
+                st.plotly_chart(fig_sem, use_container_width=True)
+            else:
+                st.info("No detailed semester data available for this cohort.")
+
+        else:
+            st.warning("No data found for this cohort with the selected filters.")
+    else:
+        st.info("Please select a cohort year.")
