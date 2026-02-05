@@ -5,7 +5,7 @@ import duckdb
 import numpy as np
 
 # --- Configuration ---
-DB_PATH = 'knust_engineering.duckdb'
+DB_PATH = 'knust_engineering_new.duckdb'
 DATA_DIR = 'data'
 
 # --- Database Setup ---
@@ -23,6 +23,7 @@ def connect_db():
             program VARCHAR,
             academic_year VARCHAR,
             semester INT,
+            level INT,
             course_code VARCHAR,
             course_name VARCHAR,
             credits INT,
@@ -36,10 +37,11 @@ def connect_db():
     conn.execute("""
         CREATE TABLE IF NOT EXISTS student_performance (
             faculty VARCHAR,
-            department VARCHAR,
+            department VARCHAR, 
             program VARCHAR,
             academic_year VARCHAR,
             semester INT,
+            level INT,
             student_id VARCHAR,
             course_code VARCHAR,
             mark DOUBLE,
@@ -102,6 +104,22 @@ def extract_metadata(file_path):
         if year_match_alt:
              y = year_match_alt.group(1)
              year = f"20{y}/20{int(y)+1}"
+             
+    # Extract Level from filename, e.g., coe1_... -> 1
+    level = None
+    # Look for digit straight after program code which is usually at start
+    # Simplified regex: look for digit before '_fs_' or '_ss_'
+    level_match = re.search(r'([1-6])_(fs|ss)_', filename.lower())
+    if level_match:
+        level = int(level_match.group(1))
+    else:
+        # Fallback: look for generic digit if structure differs
+        # This assumes the first digit in the name corresponds to level, which holds for provided examples (coe1, bme3)
+        # But be careful of years.
+        # Let's try matching [alpha]+[digit] e.g. coe1
+        level_match_alt = re.search(r'^[a-zA-Z]+(\d)', filename)
+        if level_match_alt:
+            level = int(level_match_alt.group(1))
 
     return {
         'faculty': faculty,
@@ -109,6 +127,7 @@ def extract_metadata(file_path):
         'department': program,
         'academic_year': year,
         'semester': semester,
+        'level': level,
         'filename': filename
     }
 
@@ -155,6 +174,7 @@ def process_summary_sheet(df, meta, conn):
             'program': meta['program'],
             'academic_year': meta['academic_year'],
             'semester': meta['semester'],
+            'level': meta['level'],
             'course_code': str(row[col_map['course_code']]),
             'course_name': str(row.get(col_map.get('course_name'), '')),
             'credits': int(clean_mark(row.get(col_map.get('credits'))) or 0),
@@ -168,7 +188,7 @@ def process_summary_sheet(df, meta, conn):
     if records:
         df_out = pd.DataFrame(records)
         # Ensure column order matches table
-        cols = ['faculty', 'department', 'program', 'academic_year', 'semester', 
+        cols = ['faculty', 'department', 'program', 'academic_year', 'semester', 'level',
                 'course_code', 'course_name', 'credits', 'avg_mark', 'std_dev', 
                 'num_passed', 'num_trailed', 'source_file']
         # Add missing cols if any (e.g. if num_passed wasn't found)
@@ -264,6 +284,7 @@ def process_detailed_sheet(df, meta, conn):
                 'program': meta['program'],
                 'academic_year': meta['academic_year'],
                 'semester': meta['semester'],
+                'level': meta['level'],
                 'student_id': str(row[id_col]),
                 'course_code': str(row['course_code']).strip(),
                 'mark': mark,
@@ -274,14 +295,18 @@ def process_detailed_sheet(df, meta, conn):
             
     if records:
         df_out = pd.DataFrame(records)
-        cols = ['faculty', 'department', 'program', 'academic_year', 'semester', 
+        cols = ['faculty', 'department', 'program', 'academic_year', 'semester', 'level',
                 'student_id', 'course_code', 'mark', 'cwa', 'gender', 'source_file']
         for c in cols:
             if c not in df_out.columns: df_out[c] = None
         
         # Create a clean DataFrame with exact column order
         df_final = df_out[cols]
-        conn.execute("INSERT INTO student_performance SELECT * FROM df_final")
+        try:
+            conn.execute("INSERT INTO student_performance SELECT * FROM df_final")
+        except Exception as e:
+            print(f"Error inserting: {e}")
+            return 0
         return len(records)
     return 0
 

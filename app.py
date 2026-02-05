@@ -12,7 +12,7 @@ st.markdown("### Comprehensive Student Performance & Retention Dashboard")
 @st.cache_resource
 def get_con():
     try:
-        return duckdb.connect('knust_engineering.duckdb', read_only=True)
+        return duckdb.connect('knust_engineering_new.duckdb', read_only=True)
     except Exception as e:
         return None
 
@@ -554,30 +554,41 @@ with tab_cohort:
         cohort_where = " AND ".join(cohort_clauses)
         
         # 2. Identify Cohort Students
-        # Students who started in sel_cohort AND match other filters
-        # EXCLUDING students who have records in prior years (to filter out trailers)
+        # Students who started in sel_cohort (Year 1)
+        # With the new schema, we can simply filter by academic_year AND level=1
         q_ids = f"""
-            WITH starters AS (
-                SELECT DISTINCT student_id 
-                FROM student_performance
-                WHERE academic_year = '{sel_cohort}'
-                AND REPLACE(course_code, '\n', ' ') LIKE '%1__'
-            ),
-            matches AS (
-                SELECT DISTINCT student_id 
-                FROM student_performance 
-                WHERE {cohort_where}
-            ),
-            priors AS (
-                SELECT DISTINCT student_id
-                FROM student_performance
-                WHERE academic_year < '{sel_cohort}'
-            )
-            SELECT s.student_id 
-            FROM starters s
-            JOIN matches m ON s.student_id = m.student_id
-            WHERE s.student_id NOT IN (SELECT student_id FROM priors)
+            SELECT DISTINCT student_id 
+            FROM student_performance
+            WHERE academic_year = '{sel_cohort}'
+            AND level = 1
+            AND {cohort_where}
         """
+        
+        # --- NEW: Check Data Span for Context ---
+        q_span = f"""
+            WITH cohort_list AS ({q_ids})
+            SELECT MIN(academic_year) as start_year, MAX(academic_year) as end_year, COUNT(DISTINCT academic_year) as num_years
+            FROM student_performance sp
+            JOIN cohort_list cl ON sp.student_id = cl.student_id
+        """
+        try:
+            span_df = con.execute(q_span).df()
+            if not span_df.empty and span_df.iloc[0]['num_years'] is not None:
+                start_y = span_df.iloc[0]['start_year']
+                end_y = span_df.iloc[0]['end_year']
+                n_years = span_df.iloc[0]['num_years']
+                
+                status_color = "blue"
+                status_msg = f"Partial Data ({n_years} Years)"
+                if n_years >= 4:
+                    status_color = "green"
+                    status_msg = "Completed Cohort (4+ Years Data)"
+                elif n_years == 0:
+                    status_msg = "No Data Found"
+                
+                st.info(f"**Cohort Status:** {status_msg} | **Data Span:** {start_y} - {end_y}")
+        except Exception as e:
+            st.warning("Could not determine cohort span.")
         
         # 3. Aggregated Progress Data
         # We pull data for these students across ALL years
@@ -610,9 +621,49 @@ with tab_cohort:
             retention_rate = (current_count / initial_count) * 100 if initial_count > 0 else 0
             
             m1, m2, m3 = st.columns(3)
-            m1.metric("Cohort Size (Year 1)", initial_count)
-            m2.metric("Current active / Recorded", current_count)
-            m3.metric("Retention/Data Rate", f"{retention_rate:.1f}%")
+            m1.metric("Original Cohort Size", initial_count)
+            m2.metric("Active in Final Recorded Year", current_count)
+            m3.metric("Retention/Data Rate", f"{(current_count/initial_count)*100:.1f}%" if initial_count else "0%")
+            
+            if n_years >= 1:
+                 # Check for Joiners
+                 # Joiners = Students in "Stream" - Starters
+                 # "Stream" definition using Explicit Level Logic:
+                 # Year 1 @ StartYear, Year 2 @ Start+1, etc.
+                 
+                 # 1. Get ordered list of years
+                 sorted_years = sorted(years)
+                 try:
+                     start_idx = sorted_years.index(sel_cohort)
+                     cohort_years = sorted_years[start_idx : start_idx + 4] # Next 4 years max
+                 except:
+                     cohort_years = [sel_cohort]
+
+                 # 2. Build Ladder Query (Level-based)
+                 ladder_parts = []
+                 for i, yr in enumerate(cohort_years):
+                     level_digit = i + 1
+                     if level_digit > 4: break 
+                     ladder_parts.append(f"(academic_year = '{yr}' AND level = {level_digit})")
+                 
+                 ladder_where = " OR ".join(ladder_parts)
+                 
+                 q_total_stream = f"""
+                    WITH starters AS ({q_ids}),
+                    stream AS (
+                        SELECT DISTINCT student_id FROM student_performance 
+                        WHERE {cohort_where} 
+                        AND ({ladder_where})
+                    )
+                    SELECT COUNT(DISTINCT student_id) as total_unique
+                    FROM stream
+                    WHERE student_id NOT IN (SELECT student_id FROM starters)
+                """
+                 try:
+                    joiners_count = con.execute(q_total_stream).df().iloc[0,0]
+                    st.caption(f"**Cohort Composition:** {initial_count} Starters + {joiners_count} Joiners (Repeaters/Transfers) = {initial_count + joiners_count} Total Students Served")
+                 except Exception as e:
+                    st.warning(f"Could not calc joiners: {e}")
             
             st.divider()
             
