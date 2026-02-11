@@ -529,11 +529,12 @@ with tab_cohort:
     st.write("Analyze the progression of a specific cohort (students who entered in the same year) from entry to completion.")
     
     # 1. Cohort Selection
-    # Define Cohort: Students who took Level 100 courses in a specific year
+    # Define Cohort: Class of [Year] (i.e. Students in Year 1 in that year)
+    # Starts from 2018
     q_cohort_years = """
         SELECT DISTINCT academic_year 
         FROM student_performance 
-        WHERE REPLACE(course_code, '\n', ' ') LIKE '%1__'
+        WHERE academic_year >= '2018'
         ORDER BY academic_year
     """
     try:
@@ -543,9 +544,9 @@ with tab_cohort:
         
     col_c1, col_c2 = st.columns([1, 3])
     with col_c1:
-        sel_cohort = st.selectbox("Select Cohort (Entry Year)", cohort_years)
+        sel_cohort_year = st.selectbox("Select Class Year (Started Year 1 in...)", cohort_years)
     
-    if sel_cohort:
+    if sel_cohort_year:
         # Build Filter for Cohort (Respects Faculty/Dept/Prog but IGNORES Global Year)
         # We redefine the filter logic locally
         cohort_clauses = ["1=1"]
@@ -554,12 +555,11 @@ with tab_cohort:
         cohort_where = " AND ".join(cohort_clauses)
         
         # 2. Identify Cohort Students
-        # Students who started in sel_cohort (Year 1)
-        # With the new schema, we can simply filter by academic_year AND level=1
+        # Students who were in Level 1 in the selected academic year
         q_ids = f"""
             SELECT DISTINCT student_id 
             FROM student_performance
-            WHERE academic_year = '{sel_cohort}'
+            WHERE academic_year = '{sel_cohort_year}'
             AND level = 1
             AND {cohort_where}
         """
@@ -616,39 +616,137 @@ with tab_cohort:
         
         if not df_cohort.empty:
             # Display Key Metrics (Current Status vs Entry)
-            initial_count = df_cohort.iloc[0]['active_students']
-            current_count = df_cohort.iloc[-1]['active_students']
-            retention_rate = (current_count / initial_count) * 100 if initial_count > 0 else 0
             
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Original Cohort Size", initial_count)
-            m2.metric("Active in Final Recorded Year", current_count)
-            m3.metric("Retention/Data Rate", f"{(current_count/initial_count)*100:.1f}%" if initial_count else "0%")
+            # Recalculate Initial Cohort Size based on Academic Year & Level 1
+            # "148 students in 2018" -> This means all students present in Year 1 in 2018
+            q_initial = f"""
+                SELECT COUNT(DISTINCT student_id) 
+                FROM student_performance
+                WHERE academic_year = '{sel_cohort_year}'
+                AND level = 1
+                AND {cohort_where}
+            """
+            try:
+                initial_count = con.execute(q_initial).fetchone()[0]
+            except:
+                initial_count = 0 
+                
+            # Current Status of THESE students
+            # We need to find the latest status of the students who were in the initial cohort
+            q_attrition = f"""
+                with start_cohort AS (
+                    SELECT DISTINCT student_id
+                    FROM student_performance
+                    WHERE academic_year = '{sel_cohort_year}'
+                    AND level = 1
+                    AND {cohort_where}
+                ),
+                latest_status AS (
+                    -- Get the latest status recorded for these students
+                    SELECT sp.student_id, sp.status, sp.admission_year
+                    FROM student_performance sp
+                    JOIN start_cohort sc ON sp.student_id = sc.student_id
+                    -- We use DISTINCT to get one record per student. 
+                    -- If a student has multiple statuses, we might need logic, but usually it's one status per student in our schema.
+                )
+                SELECT status, COUNT(DISTINCT student_id) as count
+                FROM latest_status
+                GROUP BY status
+            """
+            df_attr = con.execute(q_attrition).df()
+            
+            withdrawn = df_attr[df_attr['status'] == 'Withdrawn']['count'].sum() if not df_attr.empty else 0
+            deferred = df_attr[df_attr['status'] == 'Deferred']['count'].sum() if not df_attr.empty else 0
+            
+            # Composition (Fresh vs Repeating)
+            # Fresh = Admission Year matches Cohort Start Year (approx)
+            # We need to extract the year from the academic year string (e.g. 2018/2019 -> 2018)
+            try:
+                start_year_int = int(sel_cohort_year.split('/')[0])
+                fresh_condition = f"admission_year = {start_year_int}"
+            except:
+                 fresh_condition = "1=0" # Fallback
+
+            q_composition = f"""
+                SELECT 
+                    CASE 
+                        WHEN {fresh_condition} THEN 'Fresh' 
+                        ELSE 'Repeating/Previous' 
+                    END as type,
+                    COUNT(DISTINCT student_id) as count
+                FROM student_performance
+                WHERE academic_year = '{sel_cohort_year}'
+                AND level = 1
+                AND {cohort_where}
+                GROUP BY type
+            """
+            df_comp = con.execute(q_composition).df()
+            
+            fresh_count = df_comp[df_comp['type'] == 'Fresh']['count'].sum() if not df_comp.empty else 0
+            repeat_count = df_comp[df_comp['type'] == 'Repeating/Previous']['count'].sum() if not df_comp.empty else 0
+            
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Total Class Size (Year 1)", initial_count)
+            m2.metric("Fresh Students", fresh_count, help=f"Admitted in {start_year_int}")
+            m3.metric("Repeating / from Prev. Years", repeat_count)
+            m4.metric("Withdrawn/Deferred (Since Then)", withdrawn + deferred, help=f"{withdrawn} Withdrawn, {deferred} Deferred")
+            
+            if not df_attr.empty:
+                c1, c2 = st.columns(2)
+                with c1:
+                     fig_status = px.pie(df_attr, values='count', names='status', title=f"Current Status of {sel_cohort_year} Class",
+                                        color='status', color_discrete_map={'Active': 'green', 'Withdrawn': 'red', 'Deferred': 'orange'})
+                     st.plotly_chart(fig_status, use_container_width=True)
+                with c2:
+                    # Origin Breakdown (Admission Year)
+                    # Show where the students came from
+                    q_origin = f"""
+                        SELECT admission_year, COUNT(DISTINCT student_id) as count
+                        FROM student_performance
+                        WHERE academic_year = '{sel_cohort_year}'
+                        AND level = 1
+                        AND {cohort_where}
+                        GROUP BY admission_year
+                        ORDER BY admission_year
+                    """
+                    df_origin = con.execute(q_origin).df()
+                    if not df_origin.empty:
+                        # Convert to string for categorical axis
+                        df_origin['admission_year'] = df_origin['admission_year'].astype(str).str.replace('.0', '', regex=False)
+                        df_origin['admission_year'] = df_origin['admission_year'].replace({'nan': 'Unknown', '<NA>': 'Unknown', 'None': 'Unknown'})
+                        
+                        fig_origin = px.bar(df_origin, x='admission_year', y='count', 
+                                            title=f"Class Origin (Admission Year Breakdown)",
+                                            labels={'admission_year': 'Admission Year', 'count': 'Number of Students'},
+                                            text='count')
+                        fig_origin.update_xaxes(type='category') # Force categorical to allow string years
+                        st.plotly_chart(fig_origin, use_container_width=True)
             
             if n_years >= 1:
-                 # Check for Joiners
-                 # Joiners = Students in "Stream" - Starters
-                 # "Stream" definition using Explicit Level Logic:
-                 # Year 1 @ StartYear, Year 2 @ Start+1, etc.
-                 
-                 # 1. Get ordered list of years
-                 sorted_years = sorted(years)
-                 try:
-                     start_idx = sorted_years.index(sel_cohort)
-                     cohort_years = sorted_years[start_idx : start_idx + 4] # Next 4 years max
-                 except:
-                     cohort_years = [sel_cohort]
+                # Check for Joiners
+                # Joiners = Students in "Stream" - Starters
+                # "Stream" definition using Explicit Level Logic:
+                # Year 1 @ StartYear, Year 2 @ Start+1, etc.
+                
+                # 1. Get ordered list of years
+                # 1. Get ordered list of years
+                sorted_years = sorted(cohort_years) # Use cohort_years instead of undefined user_years
+                try:
+                    start_idx = sorted_years.index(sel_cohort_year)
+                    next_years = sorted_years[start_idx : start_idx + 4] # Next 4 years max
+                except:
+                    next_years = [sel_cohort_year]
 
-                 # 2. Build Ladder Query (Level-based)
-                 ladder_parts = []
-                 for i, yr in enumerate(cohort_years):
-                     level_digit = i + 1
-                     if level_digit > 4: break 
-                     ladder_parts.append(f"(academic_year = '{yr}' AND level = {level_digit})")
-                 
-                 ladder_where = " OR ".join(ladder_parts)
-                 
-                 q_total_stream = f"""
+                # 2. Build Ladder Query (Level-based)
+                ladder_parts = []
+                for i, yr in enumerate(next_years):
+                    level_digit = i + 1
+                    if level_digit > 4: break 
+                    ladder_parts.append(f"(academic_year = '{yr}' AND level = {level_digit})")
+                
+                ladder_where = " OR ".join(ladder_parts)
+                
+                q_total_stream = f"""
                     WITH starters AS ({q_ids}),
                     stream AS (
                         SELECT DISTINCT student_id FROM student_performance 
@@ -659,11 +757,16 @@ with tab_cohort:
                     FROM stream
                     WHERE student_id NOT IN (SELECT student_id FROM starters)
                 """
-                 try:
+                try:
                     joiners_count = con.execute(q_total_stream).df().iloc[0,0]
-                    st.caption(f"**Cohort Composition:** {initial_count} Starters + {joiners_count} Joiners (Repeaters/Transfers) = {initial_count + joiners_count} Total Students Served")
-                 except Exception as e:
-                    st.warning(f"Could not calc joiners: {e}")
+                    
+                    st.caption(f"""
+                    **Class Composition (Year 1):** {fresh_count} Fresh Students + {repeat_count} Repeaters/Trailers = {initial_count} Total Initial Students
+                    
+                    **Total Students Served:** {initial_count} Initial + {joiners_count} Later Joiners (joined in Year 2+) = {initial_count + joiners_count} Total Unique Students
+                    """)
+                except Exception as e:
+                    pass
             
             st.divider()
             
@@ -673,7 +776,7 @@ with tab_cohort:
             with c1:
                 # Retention Funnel (Bar Chart)
                 fig_ret = px.bar(df_cohort, x='academic_year', y='active_students',
-                                 title=f"Cohort Retention: {sel_cohort} Intake",
+                                 title=f"Retention Trend: Class of {sel_cohort_year}",
                                  labels={'active_students': 'Number of Students', 'academic_year': 'Academic Year'},
                                  text='active_students')
                 fig_ret.update_traces(textposition='outside')
@@ -682,7 +785,7 @@ with tab_cohort:
             with c2:
                 # Performance Trajectory
                 fig_perf = px.line(df_cohort, x='academic_year', y='avg_mark', markers=True,
-                                   title=f"Performance Trajectory: {sel_cohort} Intake",
+                                   title=f"Performance Trajectory: Class of {sel_cohort_year}",
                                    labels={'avg_mark': 'Average Mark', 'academic_year': 'Academic Year'})
                 fig_perf.update_yaxes(range=[40, 80])
                 st.plotly_chart(fig_perf, use_container_width=True)
@@ -699,6 +802,7 @@ with tab_cohort:
                     AVG(sp.mark) as avg_mark
                 FROM student_performance sp
                 JOIN cohort_list cl ON sp.student_id = cl.student_id
+                WHERE sp.academic_year >= '{sel_cohort_year}' -- Filter to start FROM cohort year
                 GROUP BY sp.academic_year, sp.semester
                 ORDER BY sp.academic_year, sp.semester
             """
@@ -709,12 +813,93 @@ with tab_cohort:
                 df_sem_prog['sem_label'] = df_sem_prog['academic_year'] + " Sem " + df_sem_prog['semester'].astype(str)
                 
                 fig_sem = px.line(df_sem_prog, x='sem_label', y='avg_mark', markers=True,
-                                  title=f"Semester-by-Semester Performance: {sel_cohort} Intake",
+                                  title=f"Semester-by-Semester Performance: Class of {sel_cohort_year}",
                                   labels={'sem_label': 'Semester', 'avg_mark': 'Average Mark'})
                 fig_sem.update_yaxes(range=[40, 80])
                 st.plotly_chart(fig_sem, use_container_width=True)
             else:
                 st.info("No detailed semester data available for this cohort.")
+
+            # --- 5. COURSE PERFORMANCE ANALYSIS ---
+            st.divider()
+            st.markdown("#### Course Performance Analysis")
+            st.write("Identify courses where students struggle the most and those that have the highest impact on their final CWA.")
+            
+            # A. Best and Worst Performing Courses
+            # We filter for courses taken by THIS cohort
+            q_course_perf = f"""
+                WITH cohort_students AS ({q_ids})
+                SELECT 
+                    sp.course_code,
+                    AVG(sp.mark) as avg_mark,
+                    COUNT(sp.mark) as num_students
+                FROM student_performance sp
+                JOIN cohort_students cs ON sp.student_id = cs.student_id
+                WHERE sp.mark IS NOT NULL
+                GROUP BY sp.course_code
+                HAVING num_students > 10 -- Filter out courses with extensive low enrollment
+                ORDER BY avg_mark DESC
+            """
+            df_course_perf = con.execute(q_course_perf).df()
+            
+            if not df_course_perf.empty:
+                c1, c2 = st.columns(2)
+                
+                with c1:
+                    # Top 5 Courses
+                    top_5_df = df_course_perf.head(5).sort_values(by='avg_mark', ascending=True) # Sort for bar chart
+                    fig_top = px.bar(top_5_df, x='avg_mark', y='course_code', orientation='h',
+                                     title="Top 5 Best Performing Courses",
+                                     labels={'avg_mark': 'Average Mark', 'course_code': 'Course'},
+                                     text='avg_mark')
+                    fig_top.update_traces(marker_color='green', texttemplate='%{text:.1f}')
+                    st.plotly_chart(fig_top, use_container_width=True)
+                    
+                with c2:
+                    # Bottom 5 Courses
+                    bottom_5_df = df_course_perf.tail(5).sort_values(by='avg_mark', ascending=True)
+                    fig_bottom = px.bar(bottom_5_df, x='avg_mark', y='course_code', orientation='h',
+                                        title="Bottom 5 Lowest Performing Courses",
+                                        labels={'avg_mark': 'Average Mark', 'course_code': 'Course'},
+                                        text='avg_mark')
+                    fig_bottom.update_traces(marker_color='red', texttemplate='%{text:.1f}')
+                    st.plotly_chart(fig_bottom, use_container_width=True)
+
+            # B. Impact on CWA (Correlation Analysis)
+            # Which courses correlate most with the final CWA?
+            # High correlation means doing well in this course strongly predicts a high CWA (and vice versa).
+            # This suggests the course is a "separator" or "critical" course.
+            
+            st.markdown("##### High Impact Courses (CWA Driver)")
+            st.caption("Courses with the strongest correlation to the student's overall CWA. Doing well in these courses is highly predictive of overall success.")
+            
+            q_cwa_corr = f"""
+                WITH cohort_students AS ({q_ids})
+                SELECT 
+                    sp.course_code,
+                    CORR(sp.mark, sp.cwa) as correlation,
+                    COUNT(sp.student_id) as num_students
+                FROM student_performance sp
+                JOIN cohort_students cs ON sp.student_id = cs.student_id
+                WHERE sp.mark IS NOT NULL AND sp.cwa IS NOT NULL
+                GROUP BY sp.course_code
+                HAVING num_students > 10
+                ORDER BY correlation DESC
+                LIMIT 10
+            """
+            try:
+                df_corr = con.execute(q_cwa_corr).df()
+                
+                if not df_corr.empty:
+                    fig_corr = px.bar(df_corr, x='correlation', y='course_code', orientation='h',
+                                      title="Top 10 Courses with Highest CWA Impact",
+                                      labels={'correlation': 'Correlation with CWA', 'course_code': 'Course'})
+                    fig_corr.update_yaxes(autorange="reversed") # Highest on top
+                    st.plotly_chart(fig_corr, use_container_width=True)
+                else:
+                    st.info("Insufficient data to calculate CWA correlations.")
+            except Exception as e:
+                st.error(f"Could not calculate correlations: {e}")
 
         else:
             st.warning("No data found for this cohort with the selected filters.")
