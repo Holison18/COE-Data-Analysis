@@ -2,6 +2,8 @@
 import duckdb
 import plotly.express as px
 import pandas as pd
+from typing import List, Any
+from itertools import islice
 
 # 1. Page Setup
 st.set_page_config(page_title="KNUST Analytics", layout="wide")
@@ -23,7 +25,7 @@ if not con:
     st.stop()
 
 # 3. Sidebar - Global Filters
-st.sidebar.image("https://upload.wikimedia.org/wikipedia/en/thumb/8/87/KNUST_Emblem.png/220px-KNUST_Emblem.png", use_container_width=True)
+st.sidebar.image("https://upload.wikimedia.org/wikipedia/en/thumb/8/87/KNUST_Emblem.png/220px-KNUST_Emblem.png", width='stretch')
 st.sidebar.header("Global Filters")
 
 # Helper to get valid options
@@ -150,7 +152,7 @@ with tab_course:
                 'fail_rate': 'Fail%'
             })
             top_easy_display.index = range(1, len(top_easy_display) + 1)
-            st.dataframe(top_easy_display.style.format({'Avg': '{:.1f}', 'Pass%': '{:.1f}', 'Fail%': '{:.1f}'}), use_container_width=True)
+            st.dataframe(top_easy_display.style.format({'Avg': '{:.1f}', 'Pass%': '{:.1f}', 'Fail%': '{:.1f}'}), width='stretch')
 
         with c2:
             st.markdown("##### Lowest Pass Rates")
@@ -164,7 +166,7 @@ with tab_course:
                 'fail_rate': 'Fail%'
             })
             top_diff_display.index = range(1, len(top_diff_display) + 1)
-            st.dataframe(top_diff_display.style.format({'Avg': '{:.1f}', 'Pass%': '{:.1f}', 'Fail%': '{:.1f}'}), use_container_width=True)
+            st.dataframe(top_diff_display.style.format({'Avg': '{:.1f}', 'Pass%': '{:.1f}', 'Fail%': '{:.1f}'}), width='stretch')
     
         st.divider()
 
@@ -201,7 +203,7 @@ with tab_course:
         # Hide the 'size' legend if it appears (color bar remains)
         fig_diff.update_layout(showlegend=False)
         
-        st.plotly_chart(fig_diff, use_container_width=True)
+        st.plotly_chart(fig_diff, width='stretch')
 
     st.divider()
 
@@ -235,7 +237,7 @@ with tab_course:
                               labels={'avg_mark': 'Average Mark', 'clean_code': 'Course'},
                               category_orders={'academic_year': sorted_years})
             fig_cmp.update_yaxes(range=[0, 100])
-            st.plotly_chart(fig_cmp, use_container_width=True)
+            st.plotly_chart(fig_cmp, width='stretch')
         else:
             st.info("No data found for the selected courses.")
     else:
@@ -251,19 +253,19 @@ with tab_course:
         q_trend = f"SELECT academic_year, AVG(mark) as val FROM student_performance WHERE {where_clause} GROUP BY academic_year ORDER BY academic_year"
         df_t = con.execute(q_trend).df()
         if not df_t.empty:
-            st.plotly_chart(px.line(df_t, x='academic_year', y='val', markers=True, title="Average Marks Trend"), use_container_width=True)
+            st.plotly_chart(px.line(df_t, x='academic_year', y='val', markers=True, title="Average Marks Trend"), width='stretch')
             
     elif viz_type == "Box Plot (Spread)":
         q_box = f"SELECT academic_year, mark FROM student_performance WHERE {where_clause} USING SAMPLE 10%"
         df_b = con.execute(q_box).df()
         if not df_b.empty:
-            st.plotly_chart(px.box(df_b.sort_values('academic_year'), x='academic_year', y='mark', title="Mark Distribution by Year"), use_container_width=True)
+            st.plotly_chart(px.box(df_b.sort_values('academic_year'), x='academic_year', y='mark', title="Mark Distribution by Year"), width='stretch')
             
     elif viz_type == "Histogram (Distribution)":
         q_hist = f"SELECT mark FROM student_performance WHERE {where_clause} USING SAMPLE 10%"
         df_h = con.execute(q_hist).df()
         if not df_h.empty:
-            st.plotly_chart(px.histogram(df_h, x='mark', nbins=20, title="Overall Grade Distribution"), use_container_width=True)
+            st.plotly_chart(px.histogram(df_h, x='mark', nbins=20, title="Overall Grade Distribution"), width='stretch')
 
     st.divider()
 
@@ -289,7 +291,7 @@ with tab_retain:
     if not df_risk.empty:
         df_risk['total'] = df_risk['trails'] + df_risk['passes']
         df_risk['trail_rate'] = (df_risk['trails'] / df_risk['total']) * 100
-        st.plotly_chart(px.bar(df_risk, x='academic_year', y='trail_rate', title="Trail Rate (Percentage of Fails) per Year"), use_container_width=True)
+        st.plotly_chart(px.bar(df_risk, x='academic_year', y='trail_rate', title="Trail Rate (Percentage of Fails) per Year"), width='stretch')
 
     # 2. STICKY TRAIL (Binned Bar Chart)
     st.markdown("#### Impact of Trailed Courses on CWA")
@@ -335,7 +337,7 @@ with tab_retain:
                                color_discrete_sequence=px.colors.qualitative.Prism)
         fig_stick.update_yaxes(range=[0, 100])
         fig_stick.update_layout(showlegend=False)
-        st.plotly_chart(fig_stick, use_container_width=True)
+        st.plotly_chart(fig_stick, width='stretch')
     else:
         st.info("Not enough data with CWA and Trails.")
 
@@ -371,7 +373,7 @@ with tab_demo:
                              title="Performance Distribution by Gender",
                              color_discrete_map={'Male': '#1f77b4', 'Female': '#e377c2'})
             fig_gen.update_yaxes(range=[0, 100])
-            st.plotly_chart(fig_gen, use_container_width=True)
+            st.plotly_chart(fig_gen, width='stretch')
         else:
             st.info("No gender data found for these courses.")
     else:
@@ -414,14 +416,14 @@ with tab_sem:
                               title=f"Historical Performance Distribution: {hist_course}",
                               labels={'academic_year': 'Academic Year', 'mark': 'Mark'})
             fig_hist.update_yaxes(range=[0, 100])
-            st.plotly_chart(fig_hist, use_container_width=True)
+            st.plotly_chart(fig_hist, width='stretch')
             
             # Avg Trend Line
             avg_hist = df_hist.groupby('academic_year')['mark'].mean().reset_index()
             fig_trend = px.line(avg_hist, x='academic_year', y='mark', markers=True,
                                 title=f"Average Mark Trend: {hist_course}")
             fig_trend.update_yaxes(range=[0, 100])
-            st.plotly_chart(fig_trend, use_container_width=True)
+            st.plotly_chart(fig_trend, width='stretch')
         else:
             st.info(f"No historical data found for {hist_course}")
 
@@ -462,7 +464,7 @@ with tab_sem:
                            text='mean_perf')
         fig_traj.update_traces(textposition="bottom right")
         fig_traj.update_yaxes(range=[40, 80]) # Zoom in on passing range
-        st.plotly_chart(fig_traj, use_container_width=True)
+        st.plotly_chart(fig_traj, width='stretch')
     else:
         st.info("Insufficient data for Trajectory Analysis.")
 
@@ -492,8 +494,8 @@ with tab_overview:
     if not df_overview.empty:
         # Convert lists to string for display if needed, or keep as list for standard dataframe
         # Streamlit dataframe handles lists nicely now, but string is safer for search
-        df_overview['programs'] = df_overview['programs'].apply(lambda x: ", ".join(sorted(x)) if x is not None and len(x) > 0 else "")
-        df_overview['years'] = df_overview['years'].apply(lambda x: ", ".join(sorted(x)) if x is not None and len(x) > 0 else "")
+        df_overview['programs'] = df_overview['programs'].apply(lambda x: ", ".join(sorted(x)) if isinstance(x, list) and len(x) > 0 else "")
+        df_overview['years'] = df_overview['years'].apply(lambda x: ", ".join(sorted(x)) if isinstance(x, list) and len(x) > 0 else "")
         
         # Renaissance Columns
         df_display = df_overview.rename(columns={
@@ -518,7 +520,7 @@ with tab_overview:
                 "Offered In": st.column_config.TextColumn("Offered In Programs", width="large", help="The programs that include this course."),
                 "Academic Years": st.column_config.TextColumn("Academic Years", width="medium", help="Years for which data is available.")
             },
-            use_container_width=False,
+            width='content',
             hide_index=True
         )
         st.info("No courses found matching the selected filters.")
@@ -696,7 +698,7 @@ with tab_cohort:
                 with c1:
                      fig_status = px.pie(df_attr, values='count', names='status', title=f"Current Status of {sel_cohort_year} Class",
                                         color='status', color_discrete_map={'Active': 'green', 'Withdrawn': 'red', 'Deferred': 'orange'})
-                     st.plotly_chart(fig_status, use_container_width=True)
+                     st.plotly_chart(fig_status, width='stretch')
                 with c2:
                     # Origin Breakdown (Admission Year)
                     # Show where the students came from
@@ -720,7 +722,7 @@ with tab_cohort:
                                             labels={'admission_year': 'Admission Year', 'count': 'Number of Students'},
                                             text='count')
                         fig_origin.update_xaxes(type='category') # Force categorical to allow string years
-                        st.plotly_chart(fig_origin, use_container_width=True)
+                        st.plotly_chart(fig_origin, width='stretch')
             
             if n_years >= 1:
                 # Check for Joiners
@@ -730,10 +732,10 @@ with tab_cohort:
                 
                 # 1. Get ordered list of years
                 # 1. Get ordered list of years
-                sorted_years = sorted(cohort_years) # Use cohort_years instead of undefined user_years
+                sorted_years: List[str] = sorted(cohort_years) # Use cohort_years instead of undefined user_years
                 try:
                     start_idx = sorted_years.index(sel_cohort_year)
-                    next_years = sorted_years[start_idx : start_idx + 4] # Next 4 years max
+                    next_years = list(islice(sorted_years, start_idx, start_idx + 4)) # Next 4 years max
                 except:
                     next_years = [sel_cohort_year]
 
@@ -763,7 +765,7 @@ with tab_cohort:
                     st.caption(f"""
                     **Class Composition (Year 1):** {fresh_count} Fresh Students + {repeat_count} Repeaters/Trailers = {initial_count} Total Initial Students
                     
-                    **Total Students Served:** {initial_count} Initial + {joiners_count} Later Joiners (joined in Year 2+) = {initial_count + joiners_count} Total Unique Students
+                    **Total Students Served:** {initial_count} Initial + {joiners_count} Later Joiners (joined in Year 2+) = {int(initial_count) + int(joiners_count)} Total Unique Students
                     """)
                 except Exception as e:
                     pass
@@ -780,15 +782,187 @@ with tab_cohort:
                                  labels={'active_students': 'Number of Students', 'academic_year': 'Academic Year'},
                                  text='active_students')
                 fig_ret.update_traces(textposition='outside')
-                st.plotly_chart(fig_ret, use_container_width=True)
+                st.plotly_chart(fig_ret, width='stretch')
                 
             with c2:
                 # Performance Trajectory
-                fig_perf = px.line(df_cohort, x='academic_year', y='avg_mark', markers=True,
+                # Filter to show only the 4 relevant years for this cohort
+                try:
+                    all_years_sorted: List[str] = sorted(cohort_years)
+                    s_idx = all_years_sorted.index(sel_cohort_year)
+                    relevant_years = list(islice(all_years_sorted, s_idx, s_idx + 4))
+                    df_perf = df_cohort[df_cohort['academic_year'].isin(relevant_years)]
+                except:
+                    df_perf = df_cohort
+
+                fig_perf = px.line(df_perf, x='academic_year', y='avg_mark', markers=True,
                                    title=f"Performance Trajectory: Class of {sel_cohort_year}",
                                    labels={'avg_mark': 'Average Mark', 'academic_year': 'Academic Year'})
                 fig_perf.update_yaxes(range=[40, 80])
-                st.plotly_chart(fig_perf, use_container_width=True)
+                st.plotly_chart(fig_perf, width='stretch')
+
+            st.divider()
+
+            # --- 4. TOP & BOTTOM 10 ANALYSIS ---
+            st.markdown("#### Performance Extremes: Top & Bottom 10")
+            st.write("Analyze the trajectory of the best and least performing students based on their Final Year CWA.")
+
+            # 1. Determine Final Year (Start + 3)
+            # We assume a 4-year program structure.
+            # If the cohort started in 2018/2019, they should finish in 2021/2022.
+            try:
+                start_year_int = int(sel_cohort_year.split('/')[0])
+                end_year_int = start_year_int + 3
+                final_academic_year = f"{end_year_int}/{end_year_int + 1}"
+            except:
+                final_academic_year = None
+            
+            if final_academic_year:
+                # Check if we have data for this final year
+                has_final_data = final_academic_year in cohort_years # Check against all available years
+                if not has_final_data:
+                    # Fallback? Or just warn?
+                    # Let's try to query anyway, maybe it exists in data even if not in 'cohort_years' dropdown list (which are start years)
+                    pass
+
+                # Query Top/Bottom 10 based on Final Year Sem 2 CWA
+                # We need students who:
+                # 1. Were in the start cohort (Level 1 in sel_cohort_year)
+                # 2. Reached Level 4 in final_academic_year
+                # 3. Have a CWA in Sem 2 (or max sem) of final year
+                
+                q_rank = f"""
+                    WITH start_cohort AS ({q_ids}),
+                    final_year_perf AS (
+                        SELECT sp.student_id, sp.cwa, sp.program
+                        FROM student_performance sp
+                        JOIN start_cohort sc ON sp.student_id = sc.student_id
+                        WHERE sp.academic_year = '{final_academic_year}'
+                        AND sp.level = 4
+                        AND sp.semester = 2
+                        AND sp.cwa > 0
+                        AND sp.status NOT IN ('Deferred', 'Withdrawn')
+                    )
+                    SELECT student_id, MAX(cwa) as cwa, MAX(program) as program
+                    FROM final_year_perf
+                    GROUP BY student_id
+                    ORDER BY cwa DESC
+                """
+                
+                df_ranks = con.execute(q_rank).df()
+                
+                if not df_ranks.empty:
+                    top_10 = df_ranks.head(10).reset_index(drop=True)
+                    bottom_10 = df_ranks.tail(10).sort_values('cwa', ascending=True).reset_index(drop=True) # Sort ascending for display
+                    
+                    c_top, c_bot = st.columns(2)
+                    
+                    with c_top:
+                        st.markdown(f"##### Top 10 Students (Final Year CWA)")
+                        st.dataframe(top_10.rename(columns={'student_id': 'Index Number', 'cwa': 'CWA', 'program': 'Program'}).style.format({'CWA': '{:.2f}'}), width='stretch')
+                        
+                    with c_bot:
+                        st.markdown(f"##### Bottom 10 Students (Final Year CWA)")
+                        st.dataframe(bottom_10.rename(columns={'student_id': 'Index Number', 'cwa': 'CWA', 'program': 'Program'}).style.format({'CWA': '{:.2f}'}), width='stretch')
+
+                    # --- Group Impact Analysis (New) ---
+                    st.divider()
+                    with st.expander("Explore Course Impact (Group Level)", expanded=False):
+                        st.write("Identify which courses are boosting or dragging down the performance of these groups.")
+                        
+                        def get_group_impact(student_ids, group_name):
+                            if not student_ids: return pd.DataFrame()
+                            ids_str = ",".join([f"'{s}'" for s in student_ids])
+                            q_impact = f"""
+                                SELECT sp.course_code, MAX(cs.course_name) as course_name, AVG(sp.mark) as avg_mark, COUNT(*) as num_students
+                                FROM student_performance sp
+                                LEFT JOIN (
+                                    SELECT REPLACE(course_code, '\n', ' ') as clean_code, MAX(course_name) as course_name 
+                                    FROM course_summary 
+                                    GROUP BY clean_code
+                                ) cs ON REPLACE(sp.course_code, '\n', ' ') = cs.clean_code
+                                WHERE sp.student_id IN ({ids_str})
+                                GROUP BY sp.course_code
+                                HAVING num_students > 1 -- Filter rare courses
+                                ORDER BY avg_mark DESC
+                            """
+                            return con.execute(q_impact).df()
+
+                        # Top 10 Impact
+                        top_ids = top_10['student_id'].tolist()
+                        df_top_impact = get_group_impact(top_ids, "Top 10")
+                        
+                        # Bottom 10 Impact
+                        bot_ids = bottom_10['student_id'].tolist()
+                        df_bot_impact = get_group_impact(bot_ids, "Bottom 10")
+                        
+                        i_col1, i_col2 = st.columns(2)
+                        
+                        if not df_top_impact.empty:
+                            with i_col1:
+                                st.markdown("###### Top 10 Group: Strongest Courses")
+                                st.dataframe(df_top_impact.head(5)[['course_name', 'avg_mark']].rename(columns={'course_name': 'Course', 'avg_mark': 'Avg Mark'}).style.format({'Avg Mark': '{:.1f}'}), width='stretch')
+                                
+                                st.markdown("###### Top 10 Group: Weakest Courses")
+                                st.dataframe(df_top_impact.tail(5).sort_values('avg_mark')[['course_name', 'avg_mark']].rename(columns={'course_name': 'Course', 'avg_mark': 'Avg Mark'}).style.format({'Avg Mark': '{:.1f}'}), width='stretch')
+
+                        if not df_bot_impact.empty:
+                            with i_col2:
+                                st.markdown("###### Bottom 10 Group: Strongest Courses (Saving Graces)")
+                                st.dataframe(df_bot_impact.head(5)[['course_name', 'avg_mark']].rename(columns={'course_name': 'Course', 'avg_mark': 'Avg Mark'}).style.format({'Avg Mark': '{:.1f}'}), width='stretch')
+                                
+                                st.markdown("###### Bottom 10 Group: Weakest Courses (Major Hurdles)")
+                                st.dataframe(df_bot_impact.tail(5).sort_values('avg_mark')[['course_name', 'avg_mark']].rename(columns={'course_name': 'Course', 'avg_mark': 'Avg Mark'}).style.format({'Avg Mark': '{:.1f}'}), width='stretch')
+                        
+                    # Drill Down
+                    st.divider()
+                    st.markdown("##### Individual Student Trajectory")
+                    
+                    # Merge lists for selection, labeling them
+                    top_10['Group'] = 'Top 10'
+                    bottom_10['Group'] = 'Bottom 10'
+                    combined_leaders = pd.concat([top_10, bottom_10])
+                    
+                    student_opts = combined_leaders['student_id'].tolist()
+                    sel_student = st.selectbox("Select Student to Analyze:", student_opts)
+                    
+                    if sel_student:
+                        # Get Student History
+                        q_stud_hist = f"""
+                            SELECT sp.academic_year, sp.level, sp.semester, sp.course_code, cs.course_name, sp.mark, sp.cwa
+                            FROM student_performance sp
+                            LEFT JOIN (
+                                SELECT REPLACE(course_code, '\n', ' ') as clean_code, MAX(course_name) as course_name 
+                                FROM course_summary 
+                                GROUP BY clean_code
+                            ) cs ON REPLACE(sp.course_code, '\n', ' ') = cs.clean_code
+                            WHERE sp.student_id = '{sel_student}'
+                            ORDER BY sp.academic_year, sp.semester
+                        """
+                        df_sh = con.execute(q_stud_hist).df()
+                        
+                        if not df_sh.empty:
+                            # 1. CWA Trend Line
+                            # Group by Year/Sem to get one CWA point per sem
+                            df_cwa_trend = df_sh.groupby(['academic_year', 'semester'])['cwa'].max().reset_index()
+                            # Construct a continuous axis label
+                            df_cwa_trend['period'] = df_cwa_trend['academic_year'] + " S" + df_cwa_trend['semester'].astype(str)
+                            
+                            fig_s_trend = px.line(df_cwa_trend, x='period', y='cwa', markers=True,
+                                                  title=f"CWA Progression: {sel_student}")
+                            fig_s_trend.update_yaxes(range=[0, 100])
+                            st.plotly_chart(fig_s_trend, width='stretch')
+                            
+                            # 2. Course Breakdown Table
+                            st.write("**Course Performance History**")
+                            st.dataframe(df_sh[['academic_year', 'semester', 'course_code', 'course_name', 'mark']].style.format({'mark': '{:.0f}'}), width='stretch')
+                        else:
+                            st.warning("No history found for this student.")
+                else:
+                    st.warning(f"No CWA data found for the Class of {sel_cohort_year} in their final year ({final_academic_year} Sem 2). They might not have graduated yet.")
+            
+            else:
+                st.info("Could not determine final year.")
 
             # --- 4. SEMESTER BREAKDOWN ---
             st.markdown("#### Semester-by-Semester Progression")
@@ -816,7 +990,7 @@ with tab_cohort:
                                   title=f"Semester-by-Semester Performance: Class of {sel_cohort_year}",
                                   labels={'sem_label': 'Semester', 'avg_mark': 'Average Mark'})
                 fig_sem.update_yaxes(range=[40, 80])
-                st.plotly_chart(fig_sem, use_container_width=True)
+                st.plotly_chart(fig_sem, width='stretch')
             else:
                 st.info("No detailed semester data available for this cohort.")
 
@@ -853,7 +1027,7 @@ with tab_cohort:
                                      labels={'avg_mark': 'Average Mark', 'course_code': 'Course'},
                                      text='avg_mark')
                     fig_top.update_traces(marker_color='green', texttemplate='%{text:.1f}')
-                    st.plotly_chart(fig_top, use_container_width=True)
+                    st.plotly_chart(fig_top, width='stretch')
                     
                 with c2:
                     # Bottom 5 Courses
@@ -863,7 +1037,7 @@ with tab_cohort:
                                         labels={'avg_mark': 'Average Mark', 'course_code': 'Course'},
                                         text='avg_mark')
                     fig_bottom.update_traces(marker_color='red', texttemplate='%{text:.1f}')
-                    st.plotly_chart(fig_bottom, use_container_width=True)
+                    st.plotly_chart(fig_bottom, width='stretch')
 
             # B. Impact on CWA (Correlation Analysis)
             # Which courses correlate most with the final CWA?
@@ -895,7 +1069,7 @@ with tab_cohort:
                                       title="Top 10 Courses with Highest CWA Impact",
                                       labels={'correlation': 'Correlation with CWA', 'course_code': 'Course'})
                     fig_corr.update_yaxes(autorange="reversed") # Highest on top
-                    st.plotly_chart(fig_corr, use_container_width=True)
+                    st.plotly_chart(fig_corr, width='stretch')
                 else:
                     st.info("Insufficient data to calculate CWA correlations.")
             except Exception as e:
