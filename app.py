@@ -82,7 +82,7 @@ st.sidebar.divider()
 st.sidebar.markdown("**Note:** Data based on ingested excel files.")
 
 # 4. Main Tabs
-tab_course, tab_cohort, tab_retain, tab_demo, tab_sem, tab_overview = st.tabs(["Course Performance", "Cohort Analysis", "Retention & Attrition", "Demographics", "Semester Analysis", "Course Overview"])
+tab_course, tab_cohort, tab_retain, tab_demo, tab_overview = st.tabs(["Course Performance", "Cohort Analysis", "Retention & Attrition", "Demographics", "Course Overview"])
 
 
 with tab_course:
@@ -267,11 +267,49 @@ with tab_course:
         if not df_h.empty:
             st.plotly_chart(px.histogram(df_h, x='mark', nbins=20, title="Overall Grade Distribution"), width='stretch')
 
+    # --- 6. COURSE HISTORY EXPLORER ---
+    st.markdown("#### Course History Explorer")
+    st.write("Select a course to see how it has performed over differrent Academic Years.")
+    
+    hist_course = st.selectbox("Select Course for History", courses)
+    
+    if hist_course:
+        q_hist = f"""
+            SELECT academic_year, mark
+            FROM student_performance
+            WHERE REPLACE(course_code, '\n', ' ') = '{hist_course}'
+            AND {where_clause.replace('course_code', "REPLACE(course_code, '\n', ' ')")}
+            ORDER BY academic_year
+        """
+        df_hist = con.execute(q_hist).df()
+        
+        if not df_hist.empty:
+            # Calculate Year Coverage
+            total_years = len(years) # 'years' list from sidebar
+            course_years = df_hist['academic_year'].nunique()
+            
+            # Display Metrics
+            m1, m2 = st.columns(2)
+            m1.metric("Data Available For", f"{course_years} / {total_years} Years")
+            m2.metric("Missing Years", total_years - course_years)
+        
+            # Box plot to show distribution over time (Years)
+            fig_hist = px.box(df_hist, x='academic_year', y='mark', 
+                              title=f"Historical Performance Distribution: {hist_course}",
+                              labels={'academic_year': 'Academic Year', 'mark': 'Mark'})
+            fig_hist.update_yaxes(range=[0, 100])
+            st.plotly_chart(fig_hist, width='stretch')
+            
+            # Avg Trend Line
+            avg_hist = df_hist.groupby('academic_year')['mark'].mean().reset_index()
+            fig_trend = px.line(avg_hist, x='academic_year', y='mark', markers=True,
+                                title=f"Average Mark Trend: {hist_course}")
+            fig_trend.update_yaxes(range=[0, 100])
+            st.plotly_chart(fig_trend, width='stretch')
+        else:
+            st.info(f"No historical data found for {hist_course}")
+
     st.divider()
-
-
-
-
 
 # --- MODULE B: RETENTION & ATTRITION ---
 with tab_retain:
@@ -379,95 +417,6 @@ with tab_demo:
     else:
         st.warning("Please select at least one course.")
 
-# --- MODULE E: DETAILED SEMESTER ANALYSIS ---
-with tab_sem:
-    st.subheader("Detailed Semester Analysis")
-    st.write("Deep dive into specific Course trends and Semester Trajectories.")
-    
-    # 1. COURSE HISTORY EXPLORER
-    st.divider()
-    st.markdown("#### Course History Explorer")
-    st.write("Select a course to see how it has performed over differrent Academic Years.")
-    
-    hist_course = st.selectbox("Select Course for History", courses)
-    
-    if hist_course:
-        q_hist = f"""
-            SELECT academic_year, mark
-            FROM student_performance
-            WHERE REPLACE(course_code, '\n', ' ') = '{hist_course}'
-            AND {where_clause.replace('course_code', "REPLACE(course_code, '\n', ' ')")}
-            ORDER BY academic_year
-        """
-        df_hist = con.execute(q_hist).df()
-        
-        if not df_hist.empty:
-            # Calculate Year Coverage
-            total_years = len(years) # 'years' list from sidebar
-            course_years = df_hist['academic_year'].nunique()
-            
-            # Display Metrics
-            m1, m2 = st.columns(2)
-            m1.metric("Data Available For", f"{course_years} / {total_years} Years")
-            m2.metric("Missing Years", total_years - course_years)
-        
-            # Box plot to show distribution over time (Years)
-            fig_hist = px.box(df_hist, x='academic_year', y='mark', 
-                              title=f"Historical Performance Distribution: {hist_course}",
-                              labels={'academic_year': 'Academic Year', 'mark': 'Mark'})
-            fig_hist.update_yaxes(range=[0, 100])
-            st.plotly_chart(fig_hist, width='stretch')
-            
-            # Avg Trend Line
-            avg_hist = df_hist.groupby('academic_year')['mark'].mean().reset_index()
-            fig_trend = px.line(avg_hist, x='academic_year', y='mark', markers=True,
-                                title=f"Average Mark Trend: {hist_course}")
-            fig_trend.update_yaxes(range=[0, 100])
-            st.plotly_chart(fig_trend, width='stretch')
-        else:
-            st.info(f"No historical data found for {hist_course}")
-
-    # 2. SEMESTER IMPACT ANALYSIS
-    st.divider()
-    st.markdown("#### Semester Impact Trajectory")
-    st.write("How does student performance evolve from Year 1 Sem 1 to Year 4 Sem 2?")
-    
-    q_traj = f"""
-        WITH sem_perf AS (
-            SELECT 
-                CASE 
-                    WHEN REPLACE(course_code, '\n', ' ') LIKE '%1__' THEN 'Year 1'
-                    WHEN REPLACE(course_code, '\n', ' ') LIKE '%2__' THEN 'Year 2'
-                    WHEN REPLACE(course_code, '\n', ' ') LIKE '%3__' THEN 'Year 3'
-                    WHEN REPLACE(course_code, '\n', ' ') LIKE '%4__' THEN 'Year 4'
-                    ELSE 'Other'
-                END as level_est,
-                semester,
-                avg_mark as swa_proxy
-            FROM course_summary
-            WHERE {where_clause.replace('course_code', "REPLACE(course_code, '\n', ' ')")}
-        )
-        SELECT level_est, semester, AVG(swa_proxy) as mean_perf
-        FROM sem_perf
-        WHERE level_est != 'Other'
-        GROUP BY level_est, semester
-        ORDER BY level_est, semester
-    """
-    df_traj = con.execute(q_traj).df()
-    
-    if not df_traj.empty:
-        df_traj['sem_label'] = df_traj['level_est'] + " Sem " + df_traj['semester'].astype(str)
-        
-        fig_traj = px.line(df_traj, x='sem_label', y='mean_perf', markers=True,
-                           title="Cohort Performance Trajectory (Est. by Course Levels)",
-                           labels={'sem_label': 'Semester Step', 'mean_perf': 'Average Performance'},
-                           text='mean_perf')
-        fig_traj.update_traces(textposition="bottom right")
-        fig_traj.update_yaxes(range=[40, 80]) # Zoom in on passing range
-        st.plotly_chart(fig_traj, width='stretch')
-    else:
-        st.info("Insufficient data for Trajectory Analysis.")
-
 # --- MODULE 0: COURSE OVERVIEW ---
 with tab_overview:
     st.subheader("Course Overview")
@@ -544,9 +493,11 @@ with tab_cohort:
     except:
         cohort_years = []
         
-    col_c1, col_c2 = st.columns([1, 3])
-    with col_c1:
-        sel_cohort_year = st.selectbox("Select Class Year (Started Year 1 in...)", cohort_years)
+    if selected_year == "All Years":
+        st.info("Please select a specific Academic Year from the Global Filters (Sidebar) to view the Cohort Analysis for that class.")
+        sel_cohort_year = None
+    else:
+        sel_cohort_year = selected_year
     
     if sel_cohort_year:
         # Build Filter for Cohort (Respects Faculty/Dept/Prog but IGNORES Global Year)
@@ -777,7 +728,16 @@ with tab_cohort:
             
             with c1:
                 # Retention Funnel (Bar Chart)
-                fig_ret = px.bar(df_cohort, x='academic_year', y='active_students',
+                # Filter df_cohort to only show the first 4 years for the retention trend
+                try:
+                    all_years_sorted: List[str] = sorted(cohort_years)
+                    s_idx = all_years_sorted.index(sel_cohort_year)
+                    relevant_years_retention = list(islice(all_years_sorted, s_idx, s_idx + 4))
+                    df_cohort_retention = df_cohort[df_cohort['academic_year'].isin(relevant_years_retention)]
+                except:
+                    df_cohort_retention = df_cohort
+                
+                fig_ret = px.bar(df_cohort_retention, x='academic_year', y='active_students',
                                  title=f"Retention Trend: Class of {sel_cohort_year}",
                                  labels={'active_students': 'Number of Students', 'academic_year': 'Academic Year'},
                                  text='active_students')
@@ -964,35 +924,47 @@ with tab_cohort:
             else:
                 st.info("Could not determine final year.")
 
-            # --- 4. SEMESTER BREAKDOWN ---
-            st.markdown("#### Semester-by-Semester Progression")
-            st.write("Average performance broken down by specific semesters (e.g., Year 1 Sem 1, Year 1 Sem 2).")
+            # --- 4. SEMESTER IMPACT TRAJECTORY ---
+            st.markdown("#### Semester Impact Trajectory")
+            st.write("How does student performance evolve from Year 1 Sem 1 to Year 4 Sem 2?")
             
-            q_sem_prog = f"""
-                WITH cohort_list AS ({q_ids})
-                SELECT 
-                    sp.academic_year,
-                    sp.semester,
-                    AVG(sp.mark) as avg_mark
-                FROM student_performance sp
-                JOIN cohort_list cl ON sp.student_id = cl.student_id
-                WHERE sp.academic_year >= '{sel_cohort_year}' -- Filter to start FROM cohort year
-                GROUP BY sp.academic_year, sp.semester
-                ORDER BY sp.academic_year, sp.semester
+            q_traj = f"""
+                WITH cohort_list AS ({q_ids}),
+                sem_perf AS (
+                    SELECT 
+                        CASE 
+                            WHEN REPLACE(sp.course_code, '\n', ' ') LIKE '%1__' THEN 'Year 1'
+                            WHEN REPLACE(sp.course_code, '\n', ' ') LIKE '%2__' THEN 'Year 2'
+                            WHEN REPLACE(sp.course_code, '\n', ' ') LIKE '%3__' THEN 'Year 3'
+                            WHEN REPLACE(sp.course_code, '\n', ' ') LIKE '%4__' THEN 'Year 4'
+                            ELSE 'Other'
+                        END as level_est,
+                        sp.semester,
+                        sp.mark
+                    FROM student_performance sp
+                    JOIN cohort_list cl ON sp.student_id = cl.student_id
+                    WHERE sp.academic_year >= '{sel_cohort_year}'
+                )
+                SELECT level_est, semester, AVG(mark) as mean_perf
+                FROM sem_perf
+                WHERE level_est != 'Other'
+                GROUP BY level_est, semester
+                ORDER BY level_est, semester
             """
-            df_sem_prog = con.execute(q_sem_prog).df()
+            df_traj = con.execute(q_traj).df()
             
-            if not df_sem_prog.empty:
-                # Create a readable label
-                df_sem_prog['sem_label'] = df_sem_prog['academic_year'] + " Sem " + df_sem_prog['semester'].astype(str)
+            if not df_traj.empty:
+                df_traj['sem_label'] = df_traj['level_est'] + " Sem " + df_traj['semester'].astype(str)
                 
-                fig_sem = px.line(df_sem_prog, x='sem_label', y='avg_mark', markers=True,
-                                  title=f"Semester-by-Semester Performance: Class of {sel_cohort_year}",
-                                  labels={'sem_label': 'Semester', 'avg_mark': 'Average Mark'})
-                fig_sem.update_yaxes(range=[40, 80])
-                st.plotly_chart(fig_sem, width='stretch')
+                fig_traj = px.line(df_traj, x='sem_label', y='mean_perf', markers=True,
+                                   title=f"Cohort Performance Trajectory: Class of {sel_cohort_year}",
+                                   labels={'sem_label': 'Semester Step', 'mean_perf': 'Average Performance'},
+                                   text='mean_perf')
+                fig_traj.update_traces(texttemplate='%{text:.1f}', textposition="bottom right") # Add labels for each point directly
+                fig_traj.update_yaxes(range=[40, 80]) # Zoom in on passing range
+                st.plotly_chart(fig_traj, width='stretch')
             else:
-                st.info("No detailed semester data available for this cohort.")
+                st.info("Insufficient data for Trajectory Analysis.")
 
             # --- 5. COURSE PERFORMANCE ANALYSIS ---
             st.divider()
