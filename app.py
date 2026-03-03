@@ -443,8 +443,8 @@ with tab_overview:
     if not df_overview.empty:
         # Convert lists to string for display if needed, or keep as list for standard dataframe
         # Streamlit dataframe handles lists nicely now, but string is safer for search
-        df_overview['programs'] = df_overview['programs'].apply(lambda x: ", ".join(sorted(x)) if isinstance(x, list) and len(x) > 0 else "")
-        df_overview['years'] = df_overview['years'].apply(lambda x: ", ".join(sorted(x)) if isinstance(x, list) and len(x) > 0 else "")
+        df_overview['programs'] = df_overview['programs'].apply(lambda x: ", ".join(sorted([str(i) for i in x])) if isinstance(x, (list, tuple)) or type(x).__name__ == 'ndarray' else "")
+        df_overview['years'] = df_overview['years'].apply(lambda x: ", ".join(sorted([str(i) for i in x])) if isinstance(x, (list, tuple)) or type(x).__name__ == 'ndarray' else "")
         
         # Renaissance Columns
         df_display = df_overview.rename(columns={
