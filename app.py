@@ -868,10 +868,10 @@ with tab_cohort:
 
                         if not df_bot_impact.empty:
                             with i_col2:
-                                st.markdown("###### Bottom 10 Group: Strongest Courses (Saving Graces)")
+                                st.markdown("###### Bottom 10 Group: Strongest Courses")
                                 st.dataframe(df_bot_impact.head(5)[['course_name', 'avg_mark']].rename(columns={'course_name': 'Course', 'avg_mark': 'Avg Mark'}).style.format({'Avg Mark': '{:.1f}'}), width='stretch')
                                 
-                                st.markdown("###### Bottom 10 Group: Weakest Courses (Major Hurdles)")
+                                st.markdown("###### Bottom 10 Group: Weakest Courses")
                                 st.dataframe(df_bot_impact.tail(5).sort_values('avg_mark')[['course_name', 'avg_mark']].rename(columns={'course_name': 'Course', 'avg_mark': 'Avg Mark'}).style.format({'Avg Mark': '{:.1f}'}), width='stretch')
                         
                     # Drill Down
