@@ -112,9 +112,9 @@ with tab_course:
             best = df_sem.iloc[0]
             worst = df_sem.iloc[-1]
             with col1:
-                st.metric("Highest Average", f"{best['academic_year']} Sem {best['semester']}", f"{best['val']:.2f}")
+                st.metric("Best Performing Semester", f"{best['academic_year']} Sem {best['semester']}", f"{best['val']:.2f}")
             with col2:
-                st.metric("Lowest Average", f"{worst['academic_year']} Sem {worst['semester']}", f"{worst['val']:.2f}", delta_color="inverse")
+                st.metric("Least Performing Semester", f"{worst['academic_year']} Sem {worst['semester']}", f"{worst['val']:.2f}", delta_color="inverse")
     except:
         st.info("Not enough data for Peak & Dip.")
 
