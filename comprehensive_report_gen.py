@@ -5,13 +5,33 @@ from docx import Document
 from docx.shared import Inches, Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from datetime import datetime
+import io
+import requests
+import urllib.parse
+import json
 
 # --- CONFIGURATION ---
 DB_PATH = 'knust_engineering_new.duckdb'
 REPORT_TITLE = "KNUST Engineering Data Analysis Report"
-OUTPUT_FILE = "KNUST_Comprehensive_Report.docx"
+OUTPUT_FILE = "KNUST_Comprehensive_Report_V3.docx"
 
 # --- HELPER FUNCTIONS ---
+def add_plot_to_doc(doc, fig, width_inches=6.0):
+    pass # No longer using matplotlib directly
+
+def add_quickchart_to_doc(doc, chart_config, width_inches=6.0):
+    qc_url = "https://quickchart.io/chart?c=" + urllib.parse.quote(json.dumps(chart_config))
+    try:
+        resp = requests.get(qc_url, timeout=10)
+        if resp.status_code == 200:
+            img_stream = io.BytesIO(resp.content)
+            doc.add_picture(img_stream, width=Inches(width_inches))
+        else:
+            doc.add_paragraph(f"[Chart Generation Failed: HTTP {resp.status_code}]")
+    except Exception as e:
+        doc.add_paragraph(f"[Chart Generation Error: {e}]")
+
+
 def add_heading(doc, text, level=1):
     doc.add_heading(text, level=level)
 
@@ -69,6 +89,29 @@ def generate_report():
     """
     df_college = con.execute(q_college).df()
     add_df_table(doc, df_college)
+    
+    # Add plot via QuickChart
+    years = df_college['academic_year'].tolist()
+    marks = [round(m, 2) for m in df_college['avg_mark']]
+    min_mark = max(0, min(marks) - 2)
+    max_mark = min(100, max(marks) + 2)
+    chart_config = {
+        "type": "line",
+        "data": {
+            "labels": years,
+            "datasets": [{
+                "label": "Average Mark",
+                "data": marks,
+                "borderColor": "blue",
+                "fill": False
+            }]
+        },
+        "options": {
+            "title": {"display": True, "text": "College-Wide Average Mark per Year"},
+            "scales": {"yAxes": [{"ticks": {"min": min_mark, "max": max_mark}}]}
+        }
+    }
+    add_quickchart_to_doc(doc, chart_config)
     
     # Faculty Level
     add_heading(doc, "1.2 Faculty Performance (Average Mark per Year)", level=2)
@@ -248,6 +291,108 @@ def generate_report():
     """
     df_sem = con.execute(q_sem).df()
     add_df_table(doc, df_sem)
+
+    # Add plot via QuickChart
+    semesters = df_sem['semester'].tolist()
+    marks_sem = [round(m, 2) for m in df_sem['avg_mark']]
+    min_mark_sem = max(0, min(marks_sem) - 2)
+    max_mark_sem = min(100, max(marks_sem) + 2)
+    chart_config_sem = {
+        "type": "line",
+        "data": {
+            "labels": semesters,
+            "datasets": [{
+                "label": "Avg Mark",
+                "data": marks_sem,
+                "borderColor": "orange",
+                "fill": False
+            }]
+        },
+        "options": {
+            "title": {"display": True, "text": "Average Mark by Semester"},
+            "scales": {"yAxes": [{"ticks": {"min": min_mark_sem, "max": max_mark_sem}}]}
+        }
+    }
+    add_quickchart_to_doc(doc, chart_config_sem)
+
+    # 7. YEAR-BY-YEAR CWA TREND
+    add_heading(doc, "7. Year-by-Year CWA Trend", level=1)
+    add_paragraph(doc, "Analysis of how students' Cumulative Weighted Average (CWA) changes across their four years of study. Historically, there is often a dip in performance during the second and third years as courses become more specialized, before recovering in the final year.")
+    q_level = """
+        SELECT level, AVG(cwa) as avg_cwa
+        FROM student_performance
+        WHERE cwa > 0 AND level IN (1, 2, 3, 4)
+        GROUP BY level
+        ORDER BY level
+    """
+    df_level = con.execute(q_level).df()
+    add_df_table(doc, df_level)
+
+    levels = df_level['level'].tolist()
+    cwas = [round(c, 2) for c in df_level['avg_cwa']]
+    min_cwa = max(0, min(cwas) - 2)
+    max_cwa = min(100, max(cwas) + 2)
+    chart_config_lvl = {
+        "type": "line",
+        "data": {
+            "labels": [f"Year {l}" for l in levels],
+            "datasets": [{
+                "label": "Average CWA",
+                "data": cwas,
+                "borderColor": "green",
+                "fill": False
+            }]
+        },
+        "options": {
+            "title": {"display": True, "text": "Average CWA by Year (Level)"},
+            "scales": {"yAxes": [{"ticks": {"min": min_cwa, "max": max_cwa}}]}
+        }
+    }
+    add_quickchart_to_doc(doc, chart_config_lvl)
+
+    # 8. TRAIL IMPACT ANALYSIS
+    add_heading(doc, "8. Trail Impact Analysis", level=1)
+    add_paragraph(doc, "This section analyzes the impact of trailing courses on a student's final Cumulative Weighted Average (CWA). It correlates the total number of courses a student has trailed with their ultimate academic standing.")
+    q_trail = """
+        WITH trails AS (
+            SELECT student_id, COUNT(*) as total_trails
+            FROM student_performance
+            WHERE mark < 40
+            GROUP BY student_id
+        ),
+        final_cwa AS (
+            SELECT student_id, MAX(cwa) as final_cwa
+            FROM student_performance
+            WHERE level = 4 AND semester = 2 AND cwa > 0
+            GROUP BY student_id
+        )
+        SELECT COALESCE(t.total_trails, 0) as num_trailed_courses, AVG(f.final_cwa) as avg_final_cwa, COUNT(*) as num_students
+        FROM final_cwa f
+        LEFT JOIN trails t ON f.student_id = t.student_id
+        GROUP BY num_trailed_courses
+        ORDER BY num_trailed_courses
+    """
+    df_trail = con.execute(q_trail).df()
+    add_df_table(doc, df_trail.head(15))
+
+    if not df_trail.empty:
+        trails = df_trail['num_trailed_courses'].tolist()
+        final_cwas = [round(c, 2) for c in df_trail['avg_final_cwa']]
+        chart_config_trail = {
+            "type": "bar",
+            "data": {
+                "labels": trails,
+                "datasets": [{
+                    "label": "Avg Final CWA",
+                    "data": final_cwas,
+                    "backgroundColor": "crimson"
+                }]
+            },
+            "options": {
+                "title": {"display": True, "text": "Impact of Trailed Courses on Final CWA"}
+            }
+        }
+        add_quickchart_to_doc(doc, chart_config_trail)
 
     # Save
     doc.save(OUTPUT_FILE)
